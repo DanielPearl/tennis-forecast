@@ -33,12 +33,14 @@ from ..utils.logging_setup import setup_logging
 log = setup_logging("data.match_progression")
 
 
-# How aggressively the synthetic engine advances. Higher = faster matches.
-# 0.40 means each tick has a 40% chance of advancing one game per match —
-# at a 60-second refresh that resolves a typical best-of-3 in ~30-60min,
-# which is roughly real wall-clock match length and keeps the demo feeling
-# live without burning through fixtures.
-_ADVANCE_PROB = 0.40
+# How aggressively the synthetic engine advances. Each tick advances
+# ``_GAMES_PER_TICK_MAX`` games per match (chosen uniformly from
+# 1..max). At a 60-second refresh + 3 games/tick max, a typical
+# best-of-3 resolves in ~10 minutes wall clock — fast enough that the
+# dashboard shows visible settle activity within a few minutes of
+# starting, slow enough that an open position is interesting to watch
+# rather than blinking past. Drop to 1 if you want longer demos.
+_GAMES_PER_TICK_MAX = 3
 # Drift the market price toward the model's live probability. σ in pp.
 _MARKET_DRIFT_FRACTION = 0.30
 _MARKET_NOISE_SIGMA = 0.015
@@ -139,9 +141,14 @@ def _advance_match(rec: dict[str, Any], rng: random.Random,
         p_a = 0.5 + 0.10 * sets_diff
         p_a = max(0.10, min(0.90, p_a))
 
-    advanced = False
-    if rng.random() < _ADVANCE_PROB:
-        advanced = True
+    # Advance multiple games per tick — each tick simulates a few
+    # minutes of match time. We loop up to _GAMES_PER_TICK_MAX games,
+    # but stop early if the match completes (so we don't accidentally
+    # keep playing after the third set is won).
+    games_to_play = rng.randint(1, _GAMES_PER_TICK_MAX)
+    for _ in range(games_to_play):
+        if rec.get("completed"):
+            break
         # Pick the winner of the next game weighted by p_a, with a
         # small "in-game randomness" factor so even a 70/30 favorite
         # drops a service game now and then.
@@ -163,6 +170,11 @@ def _advance_match(rec: dict[str, Any], rng: random.Random,
                 rec["set_score_b"] += 1
             rec["game_score_a"] = 0
             rec["game_score_b"] = 0
+            # Match completion check inline — if a player has 2 sets
+            # we stop advancing for this tick. The completion flags
+            # below this loop will see it.
+            if rec["set_score_a"] >= 2 or rec["set_score_b"] >= 2:
+                break
 
         # Update games_won_last_3 buffers — used by the live model's
         # momentum scorer. We just bias toward the recent winner.
