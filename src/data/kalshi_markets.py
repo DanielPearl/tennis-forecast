@@ -256,6 +256,11 @@ def collapse_to_matches(markets: list[dict],
             "yes_ask_cents_b": (b_market.get("yes_ask") if b_market else None),
             "volume_a": a_market.get("volume"),
             "open_interest_a": a_market.get("open_interest"),
+            # Kalshi-published market titles for both sides — surface
+            # the favoured side's YES question as the watchlist's
+            # "Title" column.
+            "title_a": a_market.get("title"),
+            "title_b": (b_market.get("title") if b_market else None),
         })
     return out
 

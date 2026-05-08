@@ -122,6 +122,14 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "open_interest": raw.get("open_interest_a"),
             "yes_ask_cents_a": raw.get("yes_ask_cents_a"),
             "yes_ask_cents_b": raw.get("yes_ask_cents_b"),
+            # Kalshi-published contract titles — both sides carried
+            # through so the simulator can stamp the right one on the
+            # position record at open time, and the watchlist's Title
+            # column shows whichever side the model favours.
+            "title_a": raw.get("title_a"),
+            "title_b": raw.get("title_b"),
+            "title": (raw.get("title_a") if (edge_a or 0) >= 0
+                       else raw.get("title_b")),
         })
 
     return out

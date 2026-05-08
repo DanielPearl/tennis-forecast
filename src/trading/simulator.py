@@ -318,6 +318,12 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             continue
         side_player = r["player_a"] if side == "PLAYER_A" else r["player_b"]
         position_id = f"{match_id}-{side}-{int(datetime.now(timezone.utc).timestamp())}"
+        # Pick the Kalshi-published YES title for whichever side we're
+        # actually betting on (the favoured side from the model). Falls
+        # back to the row's pre-computed ``title`` if both sides aren't
+        # carried through.
+        title = (r.get("title_a") if side == "PLAYER_A"
+                  else r.get("title_b")) or r.get("title") or ""
         new_p = {
             "position_id": position_id,
             "match_id": match_id,
@@ -327,6 +333,7 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             "player_b": r.get("player_b", ""),
             "side": side,
             "side_player": side_player,
+            "title": title,
             "entry_market_prob": round(mkt_for_side, 4),
             "entry_model_prob": round(model_for_side, 4),
             "label_at_open": label,
