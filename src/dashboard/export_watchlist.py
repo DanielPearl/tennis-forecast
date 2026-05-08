@@ -115,6 +115,13 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "recommended_action": sig.label,
             "reason_for_signal": sig.reason,
             "last_updated": now,
+            # Carry through Kalshi market metadata so the trading
+            # dashboard can render the same NBA-style watchlist
+            # columns (Contracts = open interest, Kalshi YES/NO from
+            # raw cents, etc.) without inventing numbers.
+            "open_interest": raw.get("open_interest_a"),
+            "yes_ask_cents_a": raw.get("yes_ask_cents_a"),
+            "yes_ask_cents_b": raw.get("yes_ask_cents_b"),
         })
 
     return out

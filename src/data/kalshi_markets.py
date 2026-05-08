@@ -196,7 +196,12 @@ def collapse_to_matches(markets: list[dict],
         # Round string parsed from the title (e.g. "Round Of 64").
         round_str = a_title.get("round") or "R32"
         round_code = _round_to_code(round_str)
-        market_yes_a = _yes_price_dollars(a_market) or 0.5
+        # Real-only — when Kalshi hasn't published a quote on either
+        # side (most upcoming tennis markets sit unquoted until close
+        # to tipoff), pass ``None`` through. Downstream the simulator
+        # skips opening a position on an unquoted market and the
+        # watchlist renders "—" rather than fabricating a 50% default.
+        market_yes_a = _yes_price_dollars(a_market)
         prev = (prev_markets_by_ticker or {}).get(a_market.get("ticker") or "")
         market_yes_a_prev = (_yes_price_dollars(prev) if prev else None)
         # Kalshi marks markets ``closed`` once an event has settled.
