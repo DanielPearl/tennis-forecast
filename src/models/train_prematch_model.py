@@ -28,7 +28,9 @@ import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+from sklearn.metrics import (accuracy_score, brier_score_loss, f1_score,
+                              log_loss, precision_score, recall_score,
+                              roc_auc_score)
 
 from ..data.fetch_matches import fetch_all, save_clean
 from ..features.build_prematch_features import (
@@ -243,11 +245,23 @@ def _ensemble_top_features(clf, feature_names: list[str], top_n: int = 6
 
 
 def _eval(y_true, y_prob) -> dict[str, float]:
-    y_pred = (np.asarray(y_prob) >= 0.5).astype(int)
+    """Standard probability-forecast metrics. Brier + log-loss are the
+    proper-scoring ones; accuracy / F1 / precision / recall / ROC AUC
+    are included so the trading dashboard can show the same eight
+    fields it shows for the Kalshi bots without a special case."""
+    y_prob_arr = np.clip(np.asarray(y_prob), 1e-6, 1 - 1e-6)
+    y_pred = (y_prob_arr >= 0.5).astype(int)
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
-        "log_loss": float(log_loss(y_true, np.clip(y_prob, 1e-6, 1 - 1e-6))),
-        "brier": float(brier_score_loss(y_true, y_prob)),
+        "log_loss": float(log_loss(y_true, y_prob_arr)),
+        "brier": float(brier_score_loss(y_true, y_prob_arr)),
+        # zero_division=0: protects against the rare case where the
+        # model never predicts class 1 in the holdout window (would
+        # happen on a degenerate degenerate eval slice).
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "roc_auc": float(roc_auc_score(y_true, y_prob_arr)),
     }
 
 
