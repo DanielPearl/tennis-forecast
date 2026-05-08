@@ -14,8 +14,11 @@ PyYAML>=6.0
 scikit-learn>=1.4
 joblib>=1.3
 
-# Boosting (optional — code falls back to sklearn HGB if missing)
-xgboost>=2.0
+# Boosting — sklearn's HistGradientBoostingClassifier is the default;
+# xgboost is supported by the trainer (see config.model.ensemble.use_xgboost_if_available)
+# but not pinned here because pip pulls in 300MB of unused GPU libraries
+# on a small droplet. Install it manually with `pip install xgboost` if
+# you want the (small) extra accuracy.
 
 # HTTP — used for Sackmann CSV pulls + (optional) The Odds API
 requests>=2.31
