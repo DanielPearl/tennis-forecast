@@ -178,10 +178,68 @@ def train_and_persist() -> dict[str, Any]:
     joblib.dump({k: pd.Timestamp(v).isoformat() for k, v in last_match_date.items()},
                 rest_path)
 
+    # Dump logistic regression coefficients next to metrics so the
+    # downstream dashboard can show "model coefficients" on its card.
+    # The coefficients here are interpretable per-feature weights from
+    # the Elo-only baseline (intercept + diff_elo_pre + diff_surface_elo_pre);
+    # the GBT contribution is opaque so we don't pretend to render it.
+    try:
+        import numpy as _np
+        log_coef = list(map(float, base.coef_.ravel().tolist()))
+        log_intercept = float(_np.array(base.intercept_).ravel()[0])
+    except Exception:
+        log_coef, log_intercept = [], 0.0
+
+    coefficients = {
+        "logistic": {
+            "intercept": log_intercept,
+            "features": elo_only_features,
+            "coefficients": log_coef,
+        },
+        # Top-feature gain importances from the GBT.
+        # XGBoost exposes ``feature_importances_``; sklearn HGB doesn't
+        # but exposes ``feature_importances_`` only when permutation_importance
+        # is run separately. We populate when available, else leave [].
+        "ensemble_top_features": _ensemble_top_features(clf, PREMATCH_FEATURES),
+        "blend": {
+            "ensemble_weight": bundle["blend_weight_ensemble"],
+            "logistic_weight": bundle["blend_weight_logistic"],
+        },
+        "elo": {
+            "k_base": cfg["elo"]["k_base"],
+            "k_floor": cfg["elo"]["k_floor"],
+            "surface_blend": cfg["elo"]["surface_blend"],
+        },
+    }
+    with open(artifacts_dir / "model_coefficients.json", "w") as f:
+        json.dump(coefficients, f, indent=2)
+
     metrics_path = artifacts_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
     return metrics
+
+
+def _ensemble_top_features(clf, feature_names: list[str], top_n: int = 6
+                            ) -> list[dict[str, float]]:
+    """Return the top-``top_n`` features by gain importance, when the
+    underlying classifier exposes them. We pull from the *uncalibrated*
+    estimator because CalibratedClassifierCV wraps it."""
+    try:
+        # sklearn 1.8 wraps the calibrated estimator in `.estimator`;
+        # older sklearn used `.base_estimator`. The training code keeps
+        # ``clf`` (unfitted) as a separate variable, so we fall back to
+        # importing from there.
+        importances = getattr(clf, "feature_importances_", None)
+        if importances is None:
+            return []
+        pairs = sorted(
+            zip(feature_names, importances.tolist()),
+            key=lambda x: -x[1],
+        )
+        return [{"name": n, "importance": float(v)} for n, v in pairs[:top_n]]
+    except Exception:
+        return []
 
 
 def _eval(y_true, y_prob) -> dict[str, float]:
