@@ -237,9 +237,14 @@ def _advance_match(rec: dict[str, Any], rng: random.Random,
 def _replace_completed(rec: dict[str, Any], rng: random.Random
                         ) -> dict[str, Any]:
     """Recycle a completed match slot with fresh players so the demo
-    keeps producing watchlist activity. We preserve ``match_id`` so the
-    simulator's per-match cooldown bookkeeping doesn't accidentally
-    re-open a position on the same match in the same tick."""
+    keeps producing watchlist activity.
+
+    The recycled match gets a *fresh* match_id so the simulator treats
+    it as a brand-new match — otherwise the per-match settle cooldown
+    (keyed on match_id) would block opening a position on the new
+    pairing for 30 minutes after the old match settled, even though
+    they have nothing in common.
+    """
     is_men = rng.random() < 0.5
     pool = _REPLACEMENT_POOL_ATP if is_men else _REPLACEMENT_POOL_WTA
     a, b = rng.sample(pool, 2)
@@ -251,8 +256,12 @@ def _replace_completed(rec: dict[str, Any], rng: random.Random
     rank_implied = max(0.20, min(0.80, rank_implied))
     market = round(max(0.10, min(0.90, rank_implied + rng.gauss(0.0, 0.04))), 4)
 
+    # Generate a fresh match_id by appending a short token. Keeps the
+    # original "demo-N" prefix for traceability while ensuring uniqueness.
+    new_match_id = f"{rec.get('match_id', 'match')}-r{rng.randrange(10000):04d}"
+
     return {
-        "match_id": rec.get("match_id", f"sim-{rng.randrange(10000):04d}"),
+        "match_id": new_match_id,
         "tournament": tournament,
         "surface": surface,
         "level": level,

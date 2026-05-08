@@ -282,7 +282,10 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
     # 3) Open new positions from any tradeable signal that doesn't
     #    already have one open or in cooldown. Honor max_open_positions.
     open_match_ids = {p["match_id"] for p in state["open_positions"]}
-    max_open = 8  # Tennis-side cap; conservative for the 512MB droplet.
+    # Per-tick cap on simultaneous paper positions. We want to open one
+    # on every tradeable edge in the watchlist, so set this high enough
+    # that the watchlist size — not the cap — is the bottleneck.
+    max_open = 64
 
     for r in watchlist_rows:
         if len(state["open_positions"]) >= max_open:
