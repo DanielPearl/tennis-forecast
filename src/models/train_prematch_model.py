@@ -59,13 +59,23 @@ def _split_by_date(df: pd.DataFrame, months: int):
 def _calibrate(model, X, y, holdout_frac: float = 0.2):
     """Hold out the tail of training data for calibration. Sigmoid is
     a safe default for tree ensembles whose raw scores are pushed to
-    the extremes."""
+    the extremes.
+
+    sklearn 1.8 dropped ``cv='prefit'`` and replaced it with
+    ``FrozenEstimator``; older versions (<1.6) only know ``'prefit'``.
+    Try the new API first, fall back to the old one — keeps the bot
+    portable across droplet pip-pinned versions.
+    """
     n = len(X)
     cut = int(n * (1 - holdout_frac))
     X_fit, X_cal = X.iloc[:cut], X.iloc[cut:]
     y_fit, y_cal = y[:cut], y[cut:]
     model.fit(X_fit, y_fit)
-    cal = CalibratedClassifierCV(model, method="sigmoid", cv="prefit")
+    try:
+        from sklearn.frozen import FrozenEstimator  # sklearn >= 1.6
+        cal = CalibratedClassifierCV(FrozenEstimator(model), method="sigmoid")
+    except Exception:
+        cal = CalibratedClassifierCV(model, method="sigmoid", cv="prefit")
     cal.fit(X_cal, y_cal)
     return cal
 
