@@ -36,16 +36,30 @@ log = setup_logging("scripts.live_monitor",
                      log_path=str(_REPO / "data" / "live_monitor.log"))
 
 
-def _provider_configured() -> bool:
-    return bool(os.environ.get("SOFASCORE_BASE_URL", "").strip())
+def _provider_returns_data() -> bool:
+    """Probe the real provider. We tick the synthetic engine if either
+    the provider isn't configured OR if a configured provider fails its
+    call (e.g. 403 on the SofaScore probe URL — which is the default
+    behavior for callers without an authenticated API agreement).
+
+    Without this probe, a misconfigured provider would silently freeze
+    the simulation: ``load_live_state`` falls back to the fixture file
+    on provider failure, and the fixture would never advance.
+    """
+    if not os.environ.get("SOFASCORE_BASE_URL", "").strip():
+        return False
+    try:
+        rows = fetch_provider_state()
+    except Exception:
+        return False
+    return rows is not None
 
 
 def _one_tick() -> None:
-    # 1) Match progression — only when no real provider. We don't
-    #    re-fetch the provider here; export_watchlist will do that
-    #    when it loads live state. The match-progression file write
-    #    is what feeds the synthetic case.
-    if not _provider_configured():
+    # 1) Match progression — runs whenever no real provider data is
+    #    available, so the simulation has visible activity. Real
+    #    providers, when plumbed in, write fresh state directly.
+    if not _provider_returns_data():
         match_progression.tick()
 
     # 2) Build the watchlist. We grab the standardized records via the
@@ -75,7 +89,7 @@ def main() -> None:
     cfg = load_config()
     period = int(cfg["dashboard"]["refresh_seconds"])
     log.info("live monitor started — refresh every %ds (provider=%s)",
-              period, "configured" if _provider_configured() else "synthetic")
+              period, "live" if _provider_returns_data() else "synthetic")
     while True:
         try:
             _one_tick()
