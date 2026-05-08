@@ -204,16 +204,25 @@ def build_player_a_panel(panel: pd.DataFrame) -> pd.DataFrame:
     """Re-orient the winner/loser-encoded panel into player_a/player_b
     with a balanced ``y`` label. Each match contributes two rows: one
     where player_a = winner (y=1) and one where player_a = loser (y=0).
-    This removes the orientation bias before training."""
-    a_pos = panel.copy()
-    a_pos["player_a"] = panel["winner_name"]
-    a_pos["player_b"] = panel["loser_name"]
+    This removes the orientation bias before training.
+
+    We only carry the columns the model actually consumes plus the
+    ``tourney_date`` used for the chronological train/test split.
+    Carrying the full Sackmann panel here would double-store ~50
+    irrelevant string columns and OOM the small droplet.
+    """
+    keep = ["tourney_date", "tourney_name", "surface", "tourney_level", "round"]
+    base = panel[keep].copy()
+
+    a_pos = base.copy()
+    a_pos["player_a"] = panel["winner_name"].values
+    a_pos["player_b"] = panel["loser_name"].values
     a_pos["y"] = 1
     _attach_oriented(a_pos, side="w_to_a", panel=panel)
 
-    a_neg = panel.copy()
-    a_neg["player_a"] = panel["loser_name"]
-    a_neg["player_b"] = panel["winner_name"]
+    a_neg = base.copy()
+    a_neg["player_a"] = panel["loser_name"].values
+    a_neg["player_b"] = panel["winner_name"].values
     a_neg["y"] = 0
     _attach_oriented(a_neg, side="l_to_a", panel=panel)
 

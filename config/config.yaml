@@ -27,7 +27,11 @@ data:
   wta_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master
   # Years pulled on `scripts/run_daily_prematch.py --refresh-data`.
   # Keep modest for MVP — Elo only needs ~5 years to reach steady state.
-  history_start_year: 2015
+  # Conservative window for low-RAM droplets (~512MB). Tennis Elo
+  # converges fast — 5 years of history is plenty for the rating to
+  # reach steady state. Bump to 2015+ if you have 2GB+ RAM and want
+  # the marginal accuracy gain.
+  history_start_year: 2020
   history_end_year: 2026
   tours: ["atp", "wta"]
 
