@@ -256,9 +256,13 @@ def _replace_completed(rec: dict[str, Any], rng: random.Random
     rank_implied = max(0.20, min(0.80, rank_implied))
     market = round(max(0.10, min(0.90, rank_implied + rng.gauss(0.0, 0.04))), 4)
 
-    # Generate a fresh match_id by appending a short token. Keeps the
-    # original "demo-N" prefix for traceability while ensuring uniqueness.
-    new_match_id = f"{rec.get('match_id', 'match')}-r{rng.randrange(10000):04d}"
+    # Generate a fresh match_id keyed off the slot's *original* prefix
+    # (everything before the first "-r" suffix) so a slot recycled many
+    # times keeps a short id like "demo-3-r5887" instead of accumulating
+    # "demo-3-r5887-r1234-r9999-…".
+    base_id = rec.get("match_id", "match")
+    base_root = base_id.split("-r")[0]
+    new_match_id = f"{base_root}-r{rng.randrange(10000):04d}"
 
     return {
         "match_id": new_match_id,
