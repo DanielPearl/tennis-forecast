@@ -1,19 +1,18 @@
-"""Live-monitor loop.
+"""Live-monitor loop — real Kalshi tennis markets, no synthetic data.
 
 One iteration per ``dashboard.refresh_seconds``:
 
-  1. Advance the live-state file (synthetic match progression — only
-     when no real provider is plumbed in via SOFASCORE_BASE_URL).
-  2. Build the watchlist (model probabilities, live adjustment, signals).
-  3. Tick the paper-trade simulator (open / mark / settle positions).
+  1. Pull every active Kalshi market in KXATPMATCH + KXWTAMATCH.
+  2. Collapse the two-sided markets into one record per event_ticker.
+  3. Write the canonical live-state file (the watchlist exporter
+     reads it). Match status (active / closed) and winner come straight
+     from Kalshi — no synthetic match-progression engine in the loop.
+  4. Build the watchlist (model probabilities + edge + signal label).
+  5. Tick the paper-trade simulator (open / mark / settle positions).
 
-The dashboard reads ``data/outputs/watchlist.json`` and
-``data/outputs/sim_state.json`` directly, so there's no IPC needed —
-the monitor is the only writer, the dashboard is the only reader.
-
-Why a single process: keeps the model run independent of the HTTP
-server. If the model run errors mid-tick, the dashboard keeps serving
-the last good snapshot rather than 500-ing.
+Real-only: there is no demo / fixture fallback. If Kalshi creds aren't
+plumbed in, the script raises at startup so the operator notices
+immediately rather than silently writing fake tickers.
 """
 from __future__ import annotations
 
@@ -26,8 +25,7 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
 from src.dashboard.export_watchlist import build_watchlist_records, export
-from src.data import match_progression
-from src.data.fetch_live_scores import fetch_provider_state
+from src.data import kalshi_markets
 from src.trading.simulator import tick as simulator_tick
 from src.utils.config import load_config
 from src.utils.logging_setup import setup_logging
@@ -36,48 +34,46 @@ log = setup_logging("scripts.live_monitor",
                      log_path=str(_REPO / "data" / "live_monitor.log"))
 
 
-def _provider_returns_data() -> bool:
-    """Probe the real provider. We tick the synthetic engine if either
-    the provider isn't configured OR if a configured provider fails its
-    call (e.g. 403 on the SofaScore probe URL — which is the default
-    behavior for callers without an authenticated API agreement).
+def _require_kalshi_creds() -> None:
+    if not os.environ.get("KALSHI_API_KEY_ID", "").strip():
+        raise RuntimeError(
+            "KALSHI_API_KEY_ID is not set. The tennis bot reads live "
+            "Kalshi markets via the kalshi_sdk; without creds there is "
+            "nothing to forecast against. Plumb KALSHI_API_KEY_ID + "
+            "KALSHI_PRIVATE_KEY_PATH into the systemd unit's "
+            "EnvironmentFile (or your local .env)."
+        )
+    if not os.environ.get("KALSHI_PRIVATE_KEY_PATH", "").strip():
+        raise RuntimeError(
+            "KALSHI_PRIVATE_KEY_PATH is not set. Point this at the "
+            "RSA private key file the api_key_id was issued for."
+        )
 
-    Without this probe, a misconfigured provider would silently freeze
-    the simulation: ``load_live_state`` falls back to the fixture file
-    on provider failure, and the fixture would never advance.
-    """
-    if not os.environ.get("SOFASCORE_BASE_URL", "").strip():
-        return False
-    try:
-        rows = fetch_provider_state()
-    except Exception:
-        return False
-    return rows is not None
+
+# Per-process cache of the previous tick's per-ticker yes-ask prices,
+# used to populate market_prob_a_prev for the overreaction rule.
+_prev_market_by_ticker: dict[str, dict] = {}
 
 
 def _one_tick() -> None:
-    # 1) Match progression — runs whenever no real provider data is
-    #    available, so the simulation has visible activity. Real
-    #    providers, when plumbed in, write fresh state directly.
-    if not _provider_returns_data():
-        match_progression.tick()
+    global _prev_market_by_ticker
+    raw_markets = kalshi_markets.fetch_tennis_markets()
+    # Snapshot per-ticker so the next tick's collapse can read prev_yes.
+    new_prev = {m.get("ticker"): m for m in raw_markets if m.get("ticker")}
+    records = kalshi_markets.collapse_to_matches(
+        raw_markets, prev_markets_by_ticker=_prev_market_by_ticker
+    )
+    _prev_market_by_ticker = new_prev
+    kalshi_markets.write_live_state(records)
 
-    # 2) Build the watchlist. We grab the standardized records via the
-    #    same path the export uses so the simulator sees the same
-    #    label / probability values that the dashboard does.
     rows = build_watchlist_records()
     export(records=rows)
 
-    # 3) Reload the live state for the simulator settlement step. We
-    #    need the ``completed`` / ``winner_side`` flags that the
-    #    progression engine sets — those don't end up in the watchlist
-    #    (which only carries display-shaped rows).
-    from src.data.fetch_live_scores import load_live_state
-    live = load_live_state()
-    state = simulator_tick(rows, live)
+    state = simulator_tick(rows, records)
 
-    log.info("tick — %d watchlist rows, %d open positions, %d closed (P&L %+.3f, ROI %s)",
-             len(rows),
+    log.info("tick — %d kalshi markets / %d matches / %d watchlist rows / "
+             "%d open positions / %d closed (P&L %+.3f, ROI %s)",
+             len(raw_markets), len(records), len(rows),
              state["stats"].get("open_count", 0),
              state["stats"].get("total_closed", 0),
              state["stats"].get("total_realized_pnl", 0.0),
@@ -86,10 +82,11 @@ def _one_tick() -> None:
 
 
 def main() -> None:
+    _require_kalshi_creds()
     cfg = load_config()
     period = int(cfg["dashboard"]["refresh_seconds"])
-    log.info("live monitor started — refresh every %ds (provider=%s)",
-              period, "live" if _provider_returns_data() else "synthetic")
+    log.info("live monitor started — refresh every %ds (real Kalshi feed)",
+              period)
     while True:
         try:
             _one_tick()

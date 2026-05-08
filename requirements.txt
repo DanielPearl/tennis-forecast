@@ -27,6 +27,11 @@ python-dotenv>=1.0
 # Live odds (only consumed if THE_ODDS_API_KEY is set)
 # requests above is sufficient — no extra package needed.
 
+# Kalshi SDK — installed editable from the shared sibling repo on the
+# droplet (/root/kalshi_sdk). Without this, the live monitor can't
+# fetch real KXATPMATCH / KXWTAMATCH markets.
+-e ../kalshi_sdk
+
 # Dashboard (stdlib http.server only — Flask intentionally avoided to
 # keep the droplet footprint small and match the trading-dashboard
 # pattern in the sibling NBA project).

@@ -7,10 +7,11 @@ Mirrors the dry-run paper-trading the rest of the Kalshi suite uses:
     position on that match yet.
   * Mark each open position to the current market price every tick;
     surfaces the unrealized P&L on the dashboard live.
-  * When a match completes (the synthetic match-progression engine
-    pins ``market_prob_a`` to 0/1 and sets ``winner_side``), settle
-    the position: pay $1 if our side won, $0 otherwise. Realized P&L
-    is the payout minus what we "spent" (entry market price + slippage).
+  * When Kalshi marks a match closed (the live monitor sets
+    ``completed=True`` + ``winner_side`` from the resolved YES side),
+    settle the position: pay $1 if our side won, $0 otherwise.
+    Realized P&L is the payout minus what we "spent" (entry market
+    price + slippage).
   * Risk caps mirror the other bots: max-open positions, per-match
     cooldown after a settle so a wild market doesn't re-open us into
     the same losing edge twice in 60 seconds.

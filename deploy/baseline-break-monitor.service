@@ -7,6 +7,10 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/tennis-forecast
 Environment=PYTHONUNBUFFERED=1
+# Kalshi creds piggyback on the gas-bot's .env (same key reused
+# across all bots in the suite, read-only). The leading ``-`` makes
+# systemd skip the line if the file doesn't exist on a fresh droplet.
+EnvironmentFile=-/root/gas-prices/.env
 EnvironmentFile=-/root/tennis-forecast/.env
 ExecStart=/root/tennis-forecast/.venv/bin/python /root/tennis-forecast/scripts/run_live_monitor.py
 Restart=always

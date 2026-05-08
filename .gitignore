@@ -20,11 +20,10 @@ build/
 dist/
 
 # --- runtime data (keep raw seed CSVs versioned-out; they're 50MB+) ---
+# live_state.json is written by the live monitor each tick from real
+# Kalshi market data; never committed.
 data/raw/*
 !data/raw/.gitkeep
-# Keep the demo live-state fixture so the dashboard renders
-# end-to-end on a fresh checkout without a paid live feed.
-!data/raw/live_state.json
 data/processed/*
 !data/processed/.gitkeep
 data/outputs/*
