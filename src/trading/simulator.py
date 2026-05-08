@@ -43,8 +43,12 @@ log = setup_logging("trading.simulator")
 
 # Signal labels that trigger an open. Everything else is monitor-only.
 _TRADEABLE_LABELS = {"STRONG_EDGE", "SMALL_EDGE", "MARKET_OVERREACTION"}
-# After a settle, don't re-open on the same (recycled) match for this long.
-_SAME_MATCH_COOLDOWN_SECONDS = 1800
+# After a settle, brief cooldown before re-opening on the same match_id.
+# Recycled matches get fresh ids (see ``match_progression._replace_completed``)
+# so this only blocks pathological flapping inside a single tick window —
+# 60s is enough for that without holding back the user's "buy every strong
+# edge" requirement.
+_SAME_MATCH_COOLDOWN_SECONDS = 60
 
 
 @dataclass
