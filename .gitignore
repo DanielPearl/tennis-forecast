@@ -1,0 +1,47 @@
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# --- runtime data (keep raw seed CSVs versioned-out; they're 50MB+) ---
+data/raw/*
+!data/raw/.gitkeep
+# Keep the demo live-state fixture so the dashboard renders
+# end-to-end on a fresh checkout without a paid live feed.
+!data/raw/live_state.json
+data/processed/*
+!data/processed/.gitkeep
+data/outputs/*
+!data/outputs/.gitkeep
+*.log
+*.jsonl
+
+# --- model artifacts ---
+artifacts/
+*.joblib
+*.pkl
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- notebooks ---
+.ipynb_checkpoints/

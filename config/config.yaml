@@ -1,0 +1,124 @@
+# Baseline Break — Tennis Forecast config.
+#
+# The pre-match model gives the baseline probability before the match
+# starts. The live model adjusts that probability during the match
+# using real-time match stats and market movement, then flags spots
+# where the market may be overreacting.
+#
+# Edit values here, not the code.
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  outputs_dir: data/outputs
+  artifacts_dir: data/processed/artifacts
+  watchlist_csv: data/outputs/watchlist.csv
+  watchlist_json: data/outputs/watchlist.json
+  backtest_csv: data/outputs/backtest_results.csv
+
+# ---------------------------------------------------------------------
+# Data sources. The Sackmann GitHub mirrors are the de-facto free
+# baseline for tennis match data — tour-level singles, surface tagged,
+# back to 1968 (ATP) / 1920s (WTA). We pull a rolling window so re-train
+# is fast.
+# ---------------------------------------------------------------------
+data:
+  atp_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master
+  wta_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master
+  # Years pulled on `scripts/run_daily_prematch.py --refresh-data`.
+  # Keep modest for MVP — Elo only needs ~5 years to reach steady state.
+  history_start_year: 2015
+  history_end_year: 2026
+  tours: ["atp", "wta"]
+
+# ---------------------------------------------------------------------
+# Elo configuration. Surface-specific Elos are the single most predictive
+# feature for tennis match outcomes (Sipko/Knottenbelt 2015, Kovalchik
+# 2016) and dominate any reasonable serve/return rolling stats panel.
+# ---------------------------------------------------------------------
+elo:
+  default_rating: 1500.0
+  k_base: 32.0
+  # Lower K once a player has 30+ matches; otherwise underdog volatility
+  # dominates and ratings drift.
+  k_floor: 16.0
+  k_decay_matches: 30
+  # Surface Elos use a slightly higher K to absorb the smaller per-surface
+  # match counts. They're blended 60/40 with overall Elo at inference.
+  surface_k_multiplier: 1.15
+  surface_blend: 0.60
+
+model:
+  # Held-out evaluation window. We keep the most recent 12 months as the
+  # test set so calibration metrics reflect the current player pool, not
+  # players who retired five years ago.
+  test_window_months: 12
+  random_state: 42
+  # Feature pruning happens by walk-forward permutation importance during
+  # training (see src/models/train_prematch_model.py).
+  max_features: 18
+  ensemble:
+    use_xgboost_if_available: true
+    n_estimators: 400
+    learning_rate: 0.05
+    max_depth: 4
+
+# ---------------------------------------------------------------------
+# Live-adjustment rules. Phase-1 keeps these explicit so we can debug
+# every nudge; phase-2 will replace them with a small ML adjustment
+# model trained on point-by-point logs once we have enough closed bets.
+# Numbers below are conservative deltas — they shift the baseline
+# probability by at most ~6pp under realistic in-match scenarios.
+# ---------------------------------------------------------------------
+live_rules:
+  # Each completed game shifts the baseline toward the in-match leader
+  # by `per_game_weight`, capped at `max_in_match_shift`.
+  per_game_weight: 0.012
+  max_in_match_shift: 0.10
+  # First-serve % drop ≥ this much vs match average → fatigue/injury hint.
+  first_serve_pct_drop_flag: 0.10
+  # If serve % is unusually strong, flag "underlying stats remain strong"
+  # — useful for the "lost a set but stats are good" rebound case.
+  serve_strength_z_threshold: 0.7
+  # Tiebreak / 5th-set / medical timeout → bump volatility score.
+  tiebreak_volatility_bump: 0.20
+  decider_volatility_bump: 0.15
+  medical_timeout_volatility_bump: 0.25
+  injury_risk_drop_threshold: 0.05  # serve %
+  # Market-overreaction band. If the market moved more than `overreaction_market_move`
+  # while the model-adjusted probability moved less than `overreaction_model_move`,
+  # we flag MARKET_OVERREACTION (only one direction at a time).
+  overreaction_market_move: 0.07
+  overreaction_model_move: 0.025
+
+# ---------------------------------------------------------------------
+# Trading thresholds. Conservative on purpose: we'd rather print fewer
+# signals than fire on noise. The NBA bot uses similar gates.
+# Slippage covers half-spread + book-walk on a small order; it's the
+# practical floor for an edge to be tradeable, not theoretical.
+# ---------------------------------------------------------------------
+trading:
+  slippage_pct: 0.02
+  small_edge_min: 0.04
+  strong_edge_min: 0.08
+  min_ev: 0.02
+  # Avoid extreme prices — Kalshi YES at 90c+ has terrible loss/gain ratio
+  # even when our model says 95%, and the calibration error band is wide
+  # at the tails.
+  min_market_prob: 0.10
+  max_market_prob: 0.90
+  # Volatility cap — above this we mark AVOID_VOLATILE regardless of
+  # apparent edge. Tiebreaks/deciders push past this quickly.
+  max_tradable_volatility: 0.55
+  # Bankroll units used by the backtester for ROI.
+  bet_size: 1.0
+
+# ---------------------------------------------------------------------
+# Dashboard. Stdlib http.server (no Flask dependency) — same pattern
+# as the trading-dashboard project on the droplet.
+# ---------------------------------------------------------------------
+dashboard:
+  host: "0.0.0.0"
+  port: 8090
+  refresh_seconds: 60
+  title: "Baseline Break — Tennis Forecast"

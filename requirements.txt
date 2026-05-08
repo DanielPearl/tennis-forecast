@@ -1,0 +1,29 @@
+# Tennis Forecast (Baseline Break) — Python deps.
+# Pinned conservatively. The project deliberately avoids heavyweight
+# deep-learning stacks; the model is a logistic / GBT ensemble fed by
+# Elo-derived features, which is competitive with much fancier models
+# on tennis match data and trains in seconds rather than hours.
+
+# Core data + numerics
+pandas>=2.1
+numpy>=1.26
+scipy>=1.11
+PyYAML>=6.0
+
+# ML
+scikit-learn>=1.4
+joblib>=1.3
+
+# Boosting (optional — code falls back to sklearn HGB if missing)
+xgboost>=2.0
+
+# HTTP — used for Sackmann CSV pulls + (optional) The Odds API
+requests>=2.31
+python-dotenv>=1.0
+
+# Live odds (only consumed if THE_ODDS_API_KEY is set)
+# requests above is sufficient — no extra package needed.
+
+# Dashboard (stdlib http.server only — Flask intentionally avoided to
+# keep the droplet footprint small and match the trading-dashboard
+# pattern in the sibling NBA project).

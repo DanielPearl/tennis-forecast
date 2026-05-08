@@ -1,0 +1,16 @@
+[Unit]
+Description=Baseline Break tennis dashboard (HTTP server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/tennis-forecast
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/root/tennis-forecast/.env
+ExecStart=/root/tennis-forecast/.venv/bin/python /root/tennis-forecast/app/dashboard.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
