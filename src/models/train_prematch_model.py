@@ -219,6 +219,60 @@ def train_and_persist() -> dict[str, Any]:
     metrics_path = artifacts_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
+
+    # ── Per-prediction holdout dump for the dashboard's Models tab ──
+    # The dashboard reads holdout_predictions.csv to render the ROC
+    # curve, confusion matrix, and decile-calibration chart from the
+    # trainer's actual evaluation against historical match outcomes —
+    # the same way it does for the macro bots. We dump the BLENDED
+    # probability since that's the prob the live trader actually uses.
+    try:
+        holdout_path = artifacts_dir / "holdout_predictions.csv"
+        with open(holdout_path, "w") as f:
+            f.write("predicted_prob,actual_label\n")
+            for p, y in zip(blend_p, y_test):
+                f.write(f"{float(p):.6f},{int(y)}\n")
+        log.info("wrote holdout predictions (%d rows) → %s",
+                 len(y_test), holdout_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not dump holdout_predictions.csv: %s", exc)
+
+    # ── Feature importance audit for the dashboard's Models tab ─────
+    # Same shape every other bot writes: feature, mean_importance,
+    # positive_folds, selected. Tennis doesn't run walk-forward feature
+    # selection (the GBT does its own) so we set positive_folds=1 and
+    # selected=True for everything that survived feature_list — these
+    # are *all* the features the live blended model uses.
+    try:
+        ens_imp_pairs = _ensemble_top_features(clf, PREMATCH_FEATURES,
+                                                 top_n=len(PREMATCH_FEATURES))
+        ens_imp_lookup = {p["name"]: p["importance"] for p in ens_imp_pairs}
+        # Elo-only logistic features get their importance from the
+        # absolute coefficient size — same convention the standard
+        # model page uses for permutation importance (bigger bar →
+        # bigger contribution). Scale to live alongside GBT importances.
+        elo_imp = {}
+        if log_coef:
+            scale = max(ens_imp_lookup.values(), default=1.0) or 1.0
+            max_abs_coef = max((abs(c) for c in log_coef), default=1.0) or 1.0
+            for name, coef in zip(elo_only_features, log_coef):
+                elo_imp[name] = abs(coef) / max_abs_coef * scale
+        fi_path = artifacts_dir / "feature_importance.csv"
+        with open(fi_path, "w") as f:
+            f.write("feature,mean_importance,positive_folds,selected\n")
+            for name in PREMATCH_FEATURES:
+                imp = ens_imp_lookup.get(name, elo_imp.get(name, 0.0))
+                f.write(f"{name},{float(imp):.6f},1,True\n")
+            for name in elo_only_features:
+                if name in PREMATCH_FEATURES:
+                    continue
+                imp = elo_imp.get(name, 0.0)
+                f.write(f"{name},{float(imp):.6f},1,True\n")
+        log.info("wrote feature importance (%d features) → %s",
+                 len(PREMATCH_FEATURES), fi_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not dump feature_importance.csv: %s", exc)
+
     return metrics
 
 
