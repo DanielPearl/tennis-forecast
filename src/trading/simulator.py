@@ -286,29 +286,33 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
                 live_a if p["side"] == "PLAYER_A" else 1.0 - live_a, 4
             )
 
-    # 3) Open new positions from any tradeable signal that doesn't
-    #    already have one open or in cooldown. Honor max_open_positions.
+    # 3) Open new positions on the TOP-10 buy-eligible rows, ranked by
+    #    edge × EV for the favoured side. The shared BUY gate
+    #    (config.trading) decides eligibility; sort-and-cap here
+    #    enforces "best 10" — we never open on a marginal eligible row
+    #    while a stronger one is also live.
     open_match_ids = {p["match_id"] for p in state["open_positions"]}
-    # Per-tick cap on simultaneous paper positions. We want to open one
-    # on every tradeable edge in the watchlist, so set this high enough
-    # that the watchlist size — not the cap — is the bottleneck.
-    max_open = 64
+    max_open = int(t.get("max_open_positions", 10))
 
-    for r in watchlist_rows:
+    # Pre-rank candidates: keep only eligible rows the exporter already
+    # scored, sort by buy_score desc, then run the rest of the open
+    # pipeline in that order.
+    ranked = sorted(
+        (r for r in watchlist_rows
+            if r.get("buy_eligible") and r.get("match_id")),
+        key=lambda r: -float(r.get("buy_score") or 0),
+    )
+    for r in ranked:
         if len(state["open_positions"]) >= max_open:
             break
-        label = r.get("recommended_action", "")
-        if label not in _TRADEABLE_LABELS:
-            continue
         match_id = str(r.get("match_id") or "")
-        if not match_id or match_id in open_match_ids:
+        if match_id in open_match_ids:
             continue
         if _within_cooldown(state, match_id):
             continue
-        # Single source of truth for the BUY gate — the exporter, the
-        # dashboard's "Top 10 buys" panel, and the simulator all call
-        # this. Tightening a threshold in ``config.trading`` propagates
-        # everywhere without any flag-flipping across modules.
+        # Re-evaluate against current cfg — buy_eligible came from the
+        # exporter; this is belt-and-braces against config drift between
+        # exporter and simulator within one tick.
         decision = evaluate_buy(r, t)
         if not decision.eligible:
             continue

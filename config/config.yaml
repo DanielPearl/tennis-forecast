@@ -120,6 +120,10 @@ trading:
   # matches the dashboard's documented buying criteria.
   min_open_interest: 50
   max_spread_cents: 8
+  # Hard cap on simultaneous open paper positions. The simulator ranks
+  # every eligible row by edge × EV and opens only the top N each tick,
+  # so this is the "take the best N candidates" knob.
+  max_open_positions: 10
   # Bankroll units used by the backtester for ROI.
   bet_size: 1.0
 
