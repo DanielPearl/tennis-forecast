@@ -237,43 +237,107 @@ def train_and_persist() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("could not dump holdout_predictions.csv: %s", exc)
 
-    # ── Feature importance audit for the dashboard's Models tab ─────
-    # Same shape every other bot writes: feature, mean_importance,
-    # positive_folds, selected. Tennis doesn't run walk-forward feature
-    # selection (the GBT does its own) so we set positive_folds=1 and
-    # selected=True for everything that survived feature_list — these
-    # are *all* the features the live blended model uses.
+    # ── Feature importance audit (historical-data-driven) ─────────────
+    # Permutation importance on the BLENDED model, scored against the
+    # held-out historical match outcomes. For each feature we shuffle
+    # its values and measure how much the holdout log-loss degrades —
+    # this is the same convention the trading-dashboard's standard model
+    # page uses for sim.db bots, so the rendering carries verbatim.
+    # We also dump the feature's univariate correlation with y, which
+    # gives a sign for the dashboard's "all features" bar chart.
     try:
-        ens_imp_pairs = _ensemble_top_features(clf, PREMATCH_FEATURES,
-                                                 top_n=len(PREMATCH_FEATURES))
-        ens_imp_lookup = {p["name"]: p["importance"] for p in ens_imp_pairs}
-        # Elo-only logistic features get their importance from the
-        # absolute coefficient size — same convention the standard
-        # model page uses for permutation importance (bigger bar →
-        # bigger contribution). Scale to live alongside GBT importances.
-        elo_imp = {}
-        if log_coef:
-            scale = max(ens_imp_lookup.values(), default=1.0) or 1.0
-            max_abs_coef = max((abs(c) for c in log_coef), default=1.0) or 1.0
-            for name, coef in zip(elo_only_features, log_coef):
-                elo_imp[name] = abs(coef) / max_abs_coef * scale
+        perm = _permutation_importance(
+            cal_clf, base, X_test, y_test,
+            elo_only_features, PREMATCH_FEATURES,
+            blend_ens=0.70, blend_log=0.30, n_repeats=5,
+            random_state=int(cfg["model"]["random_state"]),
+        )
+        # Univariate correlations → signs for the flattened coef chart.
+        corrs: dict[str, float] = {}
+        for name in PREMATCH_FEATURES:
+            try:
+                col = X_test[name].astype(float).values
+                if float(np.std(col)) > 1e-12:
+                    corrs[name] = float(np.corrcoef(col, y_test)[0, 1])
+                else:
+                    corrs[name] = 0.0
+            except Exception:
+                corrs[name] = 0.0
         fi_path = artifacts_dir / "feature_importance.csv"
         with open(fi_path, "w") as f:
             f.write("feature,mean_importance,positive_folds,selected\n")
-            for name in PREMATCH_FEATURES:
-                imp = ens_imp_lookup.get(name, elo_imp.get(name, 0.0))
-                f.write(f"{name},{float(imp):.6f},1,True\n")
-            for name in elo_only_features:
-                if name in PREMATCH_FEATURES:
-                    continue
-                imp = elo_imp.get(name, 0.0)
-                f.write(f"{name},{float(imp):.6f},1,True\n")
-        log.info("wrote feature importance (%d features) → %s",
-                 len(PREMATCH_FEATURES), fi_path)
+            perm_sorted = sorted(perm, key=lambda r: -r["mean_importance"])
+            for r in perm_sorted:
+                f.write(
+                    f"{r['feature']},{float(r['mean_importance']):.6f},"
+                    f"{int(r['positive_folds'])},True\n"
+                )
+        log.info("wrote permutation feature importance (%d features) → %s",
+                 len(perm_sorted), fi_path)
+
+        # Augment the coefficients JSON with the permutation results +
+        # a signed-magnitude ``coefficients`` map so the dashboard's
+        # "all features the model uses to make decisions" bar chart
+        # renders every feature, not just the Elo-only-logistic pair.
+        max_perm = max((abs(float(r["mean_importance"])) for r in perm),
+                        default=1.0) or 1.0
+        max_log = max((abs(float(c)) for c in log_coef), default=1.0) or 1.0
+        flat: dict[str, float] = {}
+        for n, c in zip(elo_only_features, log_coef):
+            flat[n] = float(c)
+        for r in perm:
+            name = r["feature"]
+            if name in flat:
+                continue
+            magnitude = float(r["mean_importance"])
+            sign = 1.0 if corrs.get(name, 0.0) >= 0 else -1.0
+            flat[name] = sign * (magnitude / max_perm) * max_log
+        flat["(intercept)"] = float(log_intercept)
+        coefficients["permutation_importance"] = perm_sorted
+        coefficients["coefficients"] = flat
+        with open(artifacts_dir / "model_coefficients.json", "w") as f:
+            json.dump(coefficients, f, indent=2)
     except Exception as exc:  # noqa: BLE001
-        log.warning("could not dump feature_importance.csv: %s", exc)
+        log.warning("could not dump permutation importance: %s", exc)
 
     return metrics
+
+
+def _permutation_importance(cal_clf, base, X_test: pd.DataFrame, y_test,
+                              elo_only_features: list[str],
+                              feature_list: list[str],
+                              blend_ens: float = 0.70,
+                              blend_log: float = 0.30,
+                              n_repeats: int = 5,
+                              random_state: int = 42
+                              ) -> list[dict[str, float]]:
+    """Walk-forward permutation importance on the blended model. Same
+    method as the sklearn helper but operates on the blended (ensemble
+    + logistic) probability so the reported importances match the
+    probabilities the live trader actually uses."""
+    rng = np.random.default_rng(random_state)
+
+    def _blended_log_loss(X: pd.DataFrame) -> float:
+        p_ens = cal_clf.predict_proba(X[feature_list])[:, 1]
+        p_log = base.predict_proba(X[elo_only_features])[:, 1]
+        p = np.clip(blend_ens * p_ens + blend_log * p_log, 1e-6, 1 - 1e-6)
+        return float(log_loss(y_test, p))
+
+    base_score = _blended_log_loss(X_test)
+    out: list[dict[str, float]] = []
+    for name in feature_list:
+        diffs = []
+        for _ in range(n_repeats):
+            X_shuf = X_test.copy()
+            X_shuf[name] = rng.permutation(X_shuf[name].values)
+            diffs.append(_blended_log_loss(X_shuf) - base_score)
+        out.append({
+            "feature": name,
+            "mean_importance": float(np.mean(diffs)),
+            "std_importance": float(np.std(diffs)),
+            "positive_folds": int(sum(1 for d in diffs if d > 0)),
+        })
+    return out
 
 
 def _ensemble_top_features(clf, feature_names: list[str], top_n: int = 6

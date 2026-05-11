@@ -38,6 +38,7 @@ from typing import Any
 
 from ..utils.config import load_config, resolve_path
 from ..utils.logging_setup import setup_logging
+from .ev import ev as ev_calc
 
 log = setup_logging("trading.simulator")
 
@@ -308,14 +309,33 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
         if market_a is None or live_a is None:
             continue
         side, mkt_for_side, model_for_side = _pick_side(float(live_a), float(market_a))
-        # Don't open a position that's already at the loser-extremes —
-        # mirrors the trading.min_market_prob / max_market_prob band.
-        if not (float(t["min_market_prob"]) <= mkt_for_side <= float(t["max_market_prob"])):
-            continue
-        # Edge size gate (rules engine signal already passed; this is
-        # belt-and-braces against label drift).
+        # ── BUY gate: edge + EV + validations all must pass ──────────────
+        # Edge size (model vs market on the chosen side).
         if abs(model_for_side - mkt_for_side) < float(t["small_edge_min"]):
             continue
+        # EV per $1 staked, slippage-adjusted. The signals layer marked
+        # the row as tradeable; the simulator re-validates against the
+        # current cfg threshold so a tightened ``min_ev`` takes effect
+        # without a re-export.
+        ev_obj = ev_calc(model_for_side, mkt_for_side, slippage)
+        if ev_obj.ev_per_contract < float(t.get("min_ev", 0.0)):
+            continue
+        # Validations: price band, book depth, spread. These mirror the
+        # ``validators:`` block on the trading-dashboard config so the
+        # buying behaviour aligns with the dashboard's own gating copy.
+        if not (float(t["min_market_prob"]) <= mkt_for_side <= float(t["max_market_prob"])):
+            continue
+        min_oi = float(t.get("min_open_interest", 0))
+        if min_oi > 0:
+            oi = r.get("open_interest")
+            if oi is None or float(oi) < min_oi:
+                continue
+        max_spread = t.get("max_spread_cents")
+        if max_spread is not None:
+            spread = r.get("spread_cents")
+            if spread is not None and float(spread) > float(max_spread):
+                continue
+        # ── all gates passed — open the position ─────────────────────────
         side_player = r["player_a"] if side == "PLAYER_A" else r["player_b"]
         position_id = f"{match_id}-{side}-{int(datetime.now(timezone.utc).timestamp())}"
         # Pick the Kalshi-published YES title for whichever side we're

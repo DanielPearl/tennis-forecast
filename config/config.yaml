@@ -114,6 +114,12 @@ trading:
   # Volatility cap — above this we mark AVOID_VOLATILE regardless of
   # apparent edge. Tiebreaks/deciders push past this quickly.
   max_tradable_volatility: 0.55
+  # Liquidity / spread validations. The simulator's BUY gate requires
+  # the book to clear both before it opens a paper position; mirrors
+  # the trading-dashboard's ``validators:`` block so the live behaviour
+  # matches the dashboard's documented buying criteria.
+  min_open_interest: 50
+  max_spread_cents: 8
   # Bankroll units used by the backtester for ROI.
   bet_size: 1.0
 

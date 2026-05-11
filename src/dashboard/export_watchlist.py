@@ -120,6 +120,8 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             # columns (Contracts = open interest, Kalshi YES/NO from
             # raw cents, etc.) without inventing numbers.
             "open_interest": raw.get("open_interest_a"),
+            "volume": raw.get("volume_a"),
+            "spread_cents": raw.get("spread_cents"),
             "yes_ask_cents_a": raw.get("yes_ask_cents_a"),
             "yes_ask_cents_b": raw.get("yes_ask_cents_b"),
             # Kalshi-published contract titles — both sides carried
