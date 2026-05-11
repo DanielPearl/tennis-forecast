@@ -41,9 +41,21 @@ from ..utils.logging_setup import setup_logging
 log = setup_logging("data.kalshi_markets")
 
 
-# Two series: men's tour and women's tour. Both share the same ticker
-# shape; the title parsing is identical.
-_TENNIS_SERIES = ("KXATPMATCH", "KXWTAMATCH")
+# All Kalshi match-level tennis series. Each is a two-sided "Will X
+# win the match?" book with the same title pattern, so a single
+# fetch/collapse path handles them all. Discovered by enumerating
+# /series with the Tennis tag and filtering for any with > 0 active
+# events. The non-match-level prop series (KXATPSETWINNER, exact
+# match score, game spread, tournament winners, etc.) are
+# deliberately excluded — they have different market shapes.
+_TENNIS_SERIES = (
+    "KXATPMATCH",            # ATP main-tour matches
+    "KXWTAMATCH",            # WTA main-tour matches
+    "KXATPCHALLENGERMATCH",  # ATP Challenger Tour
+    "KXWTACHALLENGERMATCH",  # WTA Challenger
+    "KXITFMATCH",            # ITF Men's Futures
+    "KXITFWMATCH",           # ITF Women's Futures
+)
 
 # "Will {Player Name} win the {LastA} vs {LastB}: {Round} match?"
 _TITLE_RE = re.compile(
