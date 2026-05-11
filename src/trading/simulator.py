@@ -38,6 +38,7 @@ from typing import Any
 
 from ..utils.config import load_config, resolve_path
 from ..utils.logging_setup import setup_logging
+from .buy_gate import evaluate as evaluate_buy
 from .ev import ev as ev_calc
 
 log = setup_logging("trading.simulator")
@@ -304,37 +305,17 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             continue
         if _within_cooldown(state, match_id):
             continue
-        market_a = r.get("market_prob_a")
-        live_a = r.get("live_prob_a")
-        if market_a is None or live_a is None:
+        # Single source of truth for the BUY gate — the exporter, the
+        # dashboard's "Top 10 buys" panel, and the simulator all call
+        # this. Tightening a threshold in ``config.trading`` propagates
+        # everywhere without any flag-flipping across modules.
+        decision = evaluate_buy(r, t)
+        if not decision.eligible:
             continue
-        side, mkt_for_side, model_for_side = _pick_side(float(live_a), float(market_a))
-        # ── BUY gate: edge + EV + validations all must pass ──────────────
-        # Edge size (model vs market on the chosen side).
-        if abs(model_for_side - mkt_for_side) < float(t["small_edge_min"]):
-            continue
-        # EV per $1 staked, slippage-adjusted. The signals layer marked
-        # the row as tradeable; the simulator re-validates against the
-        # current cfg threshold so a tightened ``min_ev`` takes effect
-        # without a re-export.
-        ev_obj = ev_calc(model_for_side, mkt_for_side, slippage)
-        if ev_obj.ev_per_contract < float(t.get("min_ev", 0.0)):
-            continue
-        # Validations: price band, book depth, spread. These mirror the
-        # ``validators:`` block on the trading-dashboard config so the
-        # buying behaviour aligns with the dashboard's own gating copy.
-        if not (float(t["min_market_prob"]) <= mkt_for_side <= float(t["max_market_prob"])):
-            continue
-        min_oi = float(t.get("min_open_interest", 0))
-        if min_oi > 0:
-            oi = r.get("open_interest")
-            if oi is None or float(oi) < min_oi:
-                continue
-        max_spread = t.get("max_spread_cents")
-        if max_spread is not None:
-            spread = r.get("spread_cents")
-            if spread is not None and float(spread) > float(max_spread):
-                continue
+        side = "PLAYER_A" if decision.side == "A" else "PLAYER_B"
+        mkt_for_side = decision.side_market
+        model_for_side = (float(r["live_prob_a"]) if side == "PLAYER_A"
+                            else 1.0 - float(r["live_prob_a"]))
         # ── all gates passed — open the position ─────────────────────────
         side_player = r["player_a"] if side == "PLAYER_A" else r["player_b"]
         position_id = f"{match_id}-{side}-{int(datetime.now(timezone.utc).timestamp())}"
