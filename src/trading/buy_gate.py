@@ -72,7 +72,18 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
         side_ev = ev_calc(side_model, side_market, slippage).ev_per_contract
     side_ev = float(side_ev)
 
+    # ``require_strong_edge`` (config flag) tightens the gate so the
+    # simulator only fires on STRONG_EDGE labels — drops SMALL_EDGE and
+    # MARKET_OVERREACTION. Also forces the numeric edge floor to
+    # ``strong_edge_min`` so a STRONG_EDGE label with a smaller
+    # underlying edge (shouldn't happen, but belt-and-braces) also
+    # bounces.
+    require_strong = bool(trading_cfg.get("require_strong_edge", False))
     small_edge = float(trading_cfg.get("small_edge_min", 0.04))
+    strong_edge = float(trading_cfg.get("strong_edge_min", small_edge))
+    edge_floor = strong_edge if require_strong else small_edge
+    tradeable_labels = ({"STRONG_EDGE"} if require_strong
+                          else _TRADEABLE_LABELS)
     min_ev = float(trading_cfg.get("min_ev", 0.0))
     min_p = float(trading_cfg.get("min_market_prob", 0.0))
     max_p = float(trading_cfg.get("max_market_prob", 1.0))
@@ -86,8 +97,8 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
     label = (row.get("recommended_action") or "").upper()
 
     gates = {
-        "label": label in _TRADEABLE_LABELS,
-        "edge": side_edge >= small_edge,
+        "label": label in tradeable_labels,
+        "edge": side_edge >= edge_floor,
         "ev": side_ev >= min_ev,
         "price_band": min_p <= side_market <= max_p,
         "volatility": vol_score < max_vol,
