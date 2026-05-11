@@ -29,6 +29,10 @@ _FIELDS_NUMERIC: list[str] = [
     "unforced_errors_a", "unforced_errors_b",
     "aces_a", "aces_b",
     "market_prob_a", "market_prob_a_prev",
+    # Liquidity / spread signals plumbed in from kalshi_markets — used by
+    # the live-PV layer to widen volatility when the book is thin or the
+    # spread blows out (price is less informative → trust it less).
+    "open_interest", "volume", "spread_cents",
 ]
 _FIELDS_FLAGS: list[str] = [
     "is_tiebreak", "is_decider",
@@ -51,8 +55,22 @@ def standardize(record: dict[str, Any]) -> dict[str, Any]:
         "player_a": record.get("player_a", ""),
         "player_b": record.get("player_b", ""),
     }
+    # ``kalshi_markets`` writes liquidity numbers with the ``_a`` suffix
+    # (per-side from the YES side of the event); the rules engine looks
+    # them up without the suffix because the field describes the whole
+    # book on this match. Bridge here so both shapes work.
+    src_open_int = record.get("open_interest", record.get("open_interest_a"))
+    src_volume = record.get("volume", record.get("volume_a"))
+    src_spread = record.get("spread_cents")
     for k in _FIELDS_NUMERIC:
-        v = record.get(k)
+        if k == "open_interest":
+            v = src_open_int
+        elif k == "volume":
+            v = src_volume
+        elif k == "spread_cents":
+            v = src_spread
+        else:
+            v = record.get(k)
         try:
             out[k] = float(v) if v is not None else None
         except (TypeError, ValueError):

@@ -110,6 +110,19 @@ def _yes_price_dollars(market: dict) -> float | None:
     return None
 
 
+def _spread_cents(market: dict) -> float | None:
+    """YES-side spread in cents — feeds the live volatility bump when
+    the book is wide and the quote is noisy."""
+    ya = market.get("yes_ask")
+    yb = market.get("yes_bid")
+    if ya is None or yb is None:
+        return None
+    try:
+        return float(ya) - float(yb)
+    except (TypeError, ValueError):
+        return None
+
+
 def _surface_from_rules(rules: str) -> str:
     """Best-effort surface inference from rules_primary text. Tennis
     surface drives a major feature in our model (surface-specific Elo);
@@ -256,6 +269,7 @@ def collapse_to_matches(markets: list[dict],
             "yes_ask_cents_b": (b_market.get("yes_ask") if b_market else None),
             "volume_a": a_market.get("volume"),
             "open_interest_a": a_market.get("open_interest"),
+            "spread_cents": _spread_cents(a_market),
             # Kalshi-published market titles for both sides — surface
             # the favoured side's YES question as the watchlist's
             # "Title" column.

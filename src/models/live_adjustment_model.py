@@ -111,6 +111,18 @@ def adjust(pre_match_prob_a: float, live_record: dict[str, Any]) -> LiveAdjustme
         volatility += rules["medical_timeout_volatility_bump"]
         fired.append("medical timeout → volatility")
         injury = True
+    # Liquidity / spread bump — when the book is thin or the spread blows
+    # out, the market quote is noisy and the live-PV layer should trust
+    # it less. Wide-spread tennis books (≥ 8c) cluster around match-
+    # progression jumps, where the price tends to overshoot.
+    spread = live_record.get("spread_cents")
+    if spread is not None and float(spread) >= 8.0:
+        volatility += 0.10
+        fired.append(f"wide spread {float(spread):.0f}c → market quote noisy")
+    oi = live_record.get("open_interest")
+    if oi is not None and float(oi) < 100:
+        volatility += 0.06
+        fired.append(f"thin book OI={int(float(oi))} → market quote noisy")
     # Tail volatility floor: even calm matches have some uncertainty.
     volatility = min(1.0, max(0.05, volatility))
 
