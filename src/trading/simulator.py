@@ -341,7 +341,7 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             "title": title,
             "entry_market_prob": round(mkt_for_side, 4),
             "entry_model_prob": round(model_for_side, 4),
-            "label_at_open": label,
+            "label_at_open": (r.get("recommended_action") or ""),
             "stake": stake,
             "slippage": slippage,
             "opened_at": _now_iso(),
@@ -355,7 +355,7 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
         state["stats"]["total_opened"] = int(state["stats"].get("total_opened", 0)) + 1
         log.info("opened %s on %s (%s vs %s) — entry %.2f, model %.2f, label %s",
                   side, side_player, r["player_a"], r["player_b"],
-                  mkt_for_side, model_for_side, label)
+                  mkt_for_side, model_for_side, new_p["label_at_open"])
 
     # 4) Recompute aggregates and persist.
     state["last_tick_at"] = _now_iso()
