@@ -103,14 +103,19 @@ live_rules:
 # ---------------------------------------------------------------------
 trading:
   slippage_pct: 0.02
-  small_edge_min: 0.04
+  # Edge floor lowered so the simulator's top-10 buy cap actually
+  # gets used. Per user request: rank all matches by edge × EV and
+  # take the top 10, with the gates serving as safety floors (price
+  # band, liquidity, spread, volatility) rather than edge filters.
+  # A 2pp model-vs-market gap clears slippage on the 1-unit stake,
+  # so anything above that is worth a paper position.
+  small_edge_min: 0.02
   strong_edge_min: 0.08
-  min_ev: 0.02
-  # Only fire on STRONG_EDGE rows — drops SMALL_EDGE and
-  # MARKET_OVERREACTION from the BUY gate. The numeric edge floor
-  # tightens to ``strong_edge_min`` (0.08) as well, so a row with a
-  # 4pp model-vs-market gap no longer becomes tradeable.
-  require_strong_edge: true
+  min_ev: 0.0
+  # Admit SMALL_EDGE and MARKET_OVERREACTION rows alongside
+  # STRONG_EDGE so the bot has 30+ candidates to rank rather than
+  # the handful that clear the 8pp strong-edge bar each tick.
+  require_strong_edge: false
   # Avoid extreme prices — Kalshi YES at 90c+ has terrible loss/gain ratio
   # even when our model says 95%, and the calibration error band is wide
   # at the tails.
