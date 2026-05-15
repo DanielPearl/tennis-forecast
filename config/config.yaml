@@ -124,12 +124,14 @@ trading:
   # Volatility cap — above this we mark AVOID_VOLATILE regardless of
   # apparent edge. Tiebreaks/deciders push past this quickly.
   max_tradable_volatility: 0.55
-  # Liquidity / spread validations. The simulator's BUY gate requires
-  # the book to clear both before it opens a paper position; mirrors
-  # the trading-dashboard's ``validators:`` block so the live behaviour
-  # matches the dashboard's documented buying criteria.
-  min_open_interest: 50
-  max_spread_cents: 8
+  # Liquidity / spread validations. Tennis books are thinner than
+  # NBA/CPI — KXATPMATCH / KXWTAMATCH typically post with OI in the
+  # low double digits and 4-12c spreads. The 50-OI / 8c gates the
+  # macro bots use were rejecting 39 of 40 candidates per tick. The
+  # values below let the bot find 10 candidates on a typical day
+  # while still rejecting obvious noise.
+  min_open_interest: 10
+  max_spread_cents: 15
   # Hard cap on simultaneous open paper positions. The simulator ranks
   # every eligible row by edge × EV and opens only the top N each tick,
   # so this is the "take the best N candidates" knob.
