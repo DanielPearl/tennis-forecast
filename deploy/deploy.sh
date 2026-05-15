@@ -36,14 +36,13 @@ fi
 echo "[deploy] training pre-match model — first run takes a few minutes"
 python scripts/run_daily_prematch.py
 
-# systemd units.
-cp deploy/baseline-break-dashboard.service /etc/systemd/system/
+# systemd units. The dashboard is served by the central trading-dashboard
+# service; this bot only runs the live-monitor loop that refreshes the
+# watchlist JSON the trading dashboard reads.
 cp deploy/baseline-break-monitor.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now baseline-break-dashboard
 systemctl enable --now baseline-break-monitor
 
 echo
-echo "[deploy] up — dashboard on :8090, live monitor running"
-echo "[deploy] logs:  journalctl -u baseline-break-dashboard -f"
-echo "[deploy]        journalctl -u baseline-break-monitor -f"
+echo "[deploy] up — live monitor running; dashboard served by trading-dashboard"
+echo "[deploy] logs:  journalctl -u baseline-break-monitor -f"

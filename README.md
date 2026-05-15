@@ -47,10 +47,7 @@ baseline-break/
 │   ├── run_daily_prematch.py        # train + export
 │   ├── run_live_monitor.py          # loop: refresh watchlist every refresh_seconds
 │   └── run_backtest.py
-├── app/
-│   └── dashboard.py                 # stdlib http.server: home + watchlist
 └── deploy/
-    ├── baseline-break-dashboard.service
     ├── baseline-break-monitor.service
     └── deploy.sh
 ```
@@ -98,9 +95,9 @@ cp .env.example .env
 #    cached under data/raw/ thereafter).
 python scripts/run_daily_prematch.py
 
-# 2) start the dashboard
-python app/dashboard.py
-# open http://localhost:8090
+# 2) start the live-monitor loop — refreshes data/outputs/watchlist.json
+#    on a fixed interval. The central trading-dashboard reads that file.
+python scripts/run_live_monitor.py
 ```
 
 VS Code: open the repo folder, select the `.venv` interpreter from the
@@ -141,14 +138,13 @@ The deploy script:
    live values before letting it run for real).
 3. Runs `scripts/run_daily_prematch.py` once so the dashboard has a
    model + watchlist on first boot.
-4. Installs and starts the two systemd units:
-   - `baseline-break-dashboard.service` — the HTTP server (port 8090)
-   - `baseline-break-monitor.service` — the live-monitor loop
+4. Installs and starts the live-monitor systemd unit:
+   - `baseline-break-monitor.service` — the live-monitor loop that
+     refreshes `data/outputs/watchlist.json` (the central
+     trading-dashboard reads this file directly).
 
 ```bash
-systemctl status baseline-break-dashboard
 systemctl status baseline-break-monitor
-journalctl -u baseline-break-dashboard -f
 journalctl -u baseline-break-monitor -f
 ```
 
@@ -159,11 +155,6 @@ To redeploy on top of an existing checkout: `bash deploy/deploy.sh`.
 If you don't want systemd:
 
 ```bash
-tmux new -s tennis-dashboard
-source .venv/bin/activate
-python app/dashboard.py
-# Ctrl-B then D to detach
-
 tmux new -s tennis-monitor
 source .venv/bin/activate
 python scripts/run_live_monitor.py
