@@ -102,46 +102,23 @@ live_rules:
 # practical floor for an edge to be tradeable, not theoretical.
 # ---------------------------------------------------------------------
 trading:
+  # Unified cautious floor across every Kalshi bot. See
+  # kalshi_sdk.validators.UNIFIED_VALIDATOR_DEFAULTS for the rationale.
+  # Prob bounds 25-75c, min EV 0.03, min edge 0.05, max entry 70c, spread 6c.
   slippage_pct: 0.02
-  # Edge floor lowered so the simulator's top-10 buy cap actually
-  # gets used. Per user request: rank all matches by edge × EV and
-  # take the top 10, with the gates serving as safety floors (price
-  # band, liquidity, spread, volatility) rather than edge filters.
-  # A 2pp model-vs-market gap clears slippage on the 1-unit stake,
-  # so anything above that is worth a paper position.
-  small_edge_min: 0.02
-  strong_edge_min: 0.08
-  min_ev: 0.0
-  # Admit SMALL_EDGE and MARKET_OVERREACTION rows alongside
-  # STRONG_EDGE so the bot has 30+ candidates to rank rather than
-  # the handful that clear the 8pp strong-edge bar each tick.
+  small_edge_min: 0.05
+  strong_edge_min: 0.09
+  min_ev: 0.03
   require_strong_edge: false
-  # Price band on the side we'd actually buy. Tennis is heavily
-  # lopsided — favourites routinely sit at 92-97% — and most of
-  # the model's biggest edges live at the tails (buying a 4c NO
-  # with 95%+ model conviction is huge EV even with the wide
-  # calibration band). Loosened from 0.10–0.90 so those rows clear
-  # the gate; the EV cell is already a much sharper filter than
-  # the price band was here.
-  min_market_prob: 0.03
-  max_market_prob: 0.97
-  # Volatility cap — above this we mark AVOID_VOLATILE regardless of
-  # apparent edge. Tiebreaks/deciders push past this quickly.
+  min_market_prob: 0.25
+  max_market_prob: 0.75
+  max_entry_price_cents: 70
   max_tradable_volatility: 0.55
-  # Liquidity gates effectively off for paper trading. Tennis
-  # match-winner books are routinely posted with one-sided quotes
-  # (spread → 80c+) and missing open_interest on Kalshi's pre-match
-  # listings; enforcing real-money-style gates here means the bot
-  # only ever finds 1-2 paper candidates and the user can't see the
-  # ranked Top-10. Set both to null so the buy_gate skips them.
-  # Real-money mode would need these re-enabled.
-  min_open_interest: null
-  max_spread_cents: null
+  min_open_interest: 50
+  max_spread_cents: 6
   # Hard cap on simultaneous open paper positions. The simulator ranks
-  # every eligible row by edge × EV and opens only the top N each tick,
-  # so this is the "take the best N candidates" knob.
+  # every eligible row by edge × EV and opens only the top N each tick.
   max_open_positions: 10
-  # Bankroll units used by the backtester for ROI.
   bet_size: 1.0
 
 # ---------------------------------------------------------------------
