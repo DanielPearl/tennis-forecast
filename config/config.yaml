@@ -128,14 +128,15 @@ trading:
   # Volatility cap — above this we mark AVOID_VOLATILE regardless of
   # apparent edge. Tiebreaks/deciders push past this quickly.
   max_tradable_volatility: 0.55
-  # Liquidity / spread validations. Tennis books are thinner than
-  # NBA/CPI — KXATPMATCH / KXWTAMATCH typically post with OI in the
-  # low double digits and 4-12c spreads. The 50-OI / 8c gates the
-  # macro bots use were rejecting 39 of 40 candidates per tick. The
-  # values below let the bot find 10 candidates on a typical day
-  # while still rejecting obvious noise.
-  min_open_interest: 10
-  max_spread_cents: 15
+  # Liquidity gates effectively off for paper trading. Tennis
+  # match-winner books are routinely posted with one-sided quotes
+  # (spread → 80c+) and missing open_interest on Kalshi's pre-match
+  # listings; enforcing real-money-style gates here means the bot
+  # only ever finds 1-2 paper candidates and the user can't see the
+  # ranked Top-10. Set both to null so the buy_gate skips them.
+  # Real-money mode would need these re-enabled.
+  min_open_interest: null
+  max_spread_cents: null
   # Hard cap on simultaneous open paper positions. The simulator ranks
   # every eligible row by edge × EV and opens only the top N each tick,
   # so this is the "take the best N candidates" knob.
