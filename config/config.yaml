@@ -116,11 +116,15 @@ trading:
   # STRONG_EDGE so the bot has 30+ candidates to rank rather than
   # the handful that clear the 8pp strong-edge bar each tick.
   require_strong_edge: false
-  # Avoid extreme prices — Kalshi YES at 90c+ has terrible loss/gain ratio
-  # even when our model says 95%, and the calibration error band is wide
-  # at the tails.
-  min_market_prob: 0.10
-  max_market_prob: 0.90
+  # Price band on the side we'd actually buy. Tennis is heavily
+  # lopsided — favourites routinely sit at 92-97% — and most of
+  # the model's biggest edges live at the tails (buying a 4c NO
+  # with 95%+ model conviction is huge EV even with the wide
+  # calibration band). Loosened from 0.10–0.90 so those rows clear
+  # the gate; the EV cell is already a much sharper filter than
+  # the price band was here.
+  min_market_prob: 0.03
+  max_market_prob: 0.97
   # Volatility cap — above this we mark AVOID_VOLATILE regardless of
   # apparent edge. Tiebreaks/deciders push past this quickly.
   max_tradable_volatility: 0.55
