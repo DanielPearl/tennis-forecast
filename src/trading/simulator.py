@@ -36,6 +36,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from kalshi_sdk.validators import should_close_profit_lock
+
 from ..utils.config import load_config, resolve_path
 from ..utils.logging_setup import setup_logging
 from .buy_gate import evaluate as evaluate_buy
@@ -223,6 +225,29 @@ def _settle_position(p: dict[str, Any], live_record: dict[str, Any],
     }
 
 
+def _close_at_market(p: dict[str, Any], slippage: float,
+                      reason: str) -> dict[str, Any]:
+    """Close a position at its current mark-to-market price. Mirrors
+    _settle_position's schema so the dashboard / aggregator don't need
+    to branch on close method. P&L is linear: bought at entry, sells
+    back at current, one round of slippage on exit.
+    """
+    stake = float(p.get("stake", 1.0))
+    entry = float(p["entry_market_prob"])
+    current = float(p.get("current_market_prob", entry))
+    realized = stake * (current - entry - slippage)
+    return {
+        **p,
+        "closed_at": _now_iso(),
+        "winner_side": None,
+        "won": None,
+        "result": "PROFIT_LOCK" if current >= entry else "STOP_LOSS",
+        "settle_market_prob": round(current, 4),
+        "realized_pnl": round(realized, 4),
+        "close_reason": reason,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Public entry points                                                         #
 # --------------------------------------------------------------------------- #
@@ -285,6 +310,36 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             p["current_model_prob"] = round(
                 live_a if p["side"] == "PLAYER_A" else 1.0 - live_a, 4
             )
+
+    # 2b) Profit-lock exit: close any open position whose side has
+    #     drifted to >= profit_lock_market_prob on Kalshi. At 95+¢ the
+    #     residual edge is rounding error vs the variance of holding,
+    #     so we lock in profit and recycle capital. Shared rule with
+    #     darts / table-tennis via kalshi_sdk.validators.
+    profit_lock = float(t.get("profit_lock_market_prob", 0.95))
+    still_open_after_lock: list[dict[str, Any]] = []
+    profit_locked: list[dict[str, Any]] = []
+    for p in state["open_positions"]:
+        close, reason = should_close_profit_lock(
+            p, profit_lock_market_prob=profit_lock)
+        if close:
+            closed = _close_at_market(p, slippage, reason or "profit_lock")
+            profit_locked.append(closed)
+            state.setdefault("last_settled_at_by_match_id",
+                              {})[p["match_id"]] = closed["closed_at"]
+            log.info(
+                "profit-lock close %s on %s — entry %.2f → exit %.2f, "
+                "P&L %+.3f (%s)",
+                p["side"], p.get("side_player", ""),
+                p["entry_market_prob"], closed["settle_market_prob"],
+                closed["realized_pnl"], reason,
+            )
+        else:
+            still_open_after_lock.append(p)
+    state["open_positions"] = still_open_after_lock
+    if profit_locked:
+        state["closed_positions"] = (state.get("closed_positions")
+                                       or []) + profit_locked
 
     # 3) Open new positions on the TOP-10 buy-eligible rows, ranked by
     #    edge × EV for the favoured side. The shared BUY gate

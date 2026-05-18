@@ -120,6 +120,12 @@ trading:
   # every eligible row by edge × EV and opens only the top N each tick.
   max_open_positions: 10
   bet_size: 1.0
+  # Profit-lock exit: close any open position whose side has drifted
+  # to >= this market_prob on Kalshi. At 95+¢ on a side you hold, the
+  # remaining edge is rounding error vs the variance of holding to
+  # settlement (risk 95¢ for ≤5¢ upside), so we lock in profit and
+  # recycle capital. Shared rule with darts / table-tennis.
+  profit_lock_market_prob: 0.95
 
 # ---------------------------------------------------------------------
 # Dashboard. Stdlib http.server (no Flask dependency) — same pattern
