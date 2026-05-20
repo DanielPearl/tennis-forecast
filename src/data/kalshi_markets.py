@@ -52,8 +52,11 @@ _TENNIS_SERIES = (
 )
 
 # "Will {Player Name} win the {LastA} vs {LastB}: {Round} match?"
+# lastA/lastB are non-greedy multi-word, terminated by " vs " and ":"
+# respectively — handles compound surnames like "Moro Canas",
+# "de Minaur", "van der Meer" that ``[^\s]+`` would silently fail on.
 _TITLE_RE = re.compile(
-    r"^Will (?P<player>.+?) win the (?P<lastA>[^\s]+) vs (?P<lastB>[^\s]+):"
+    r"^Will (?P<player>.+?) win the (?P<lastA>.+?) vs (?P<lastB>.+?):"
     r"\s*(?P<round>[^?]+) match\?\s*$"
 )
 
