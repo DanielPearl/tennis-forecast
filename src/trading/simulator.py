@@ -475,6 +475,19 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             if r.get("buy_eligible") and r.get("match_id")),
         key=lambda r: -float(r.get("buy_score") or 0),
     )
+    # Minimum time-to-close before we'll consider opening. Kalshi
+    # sometimes leaves a market in ``status=active`` for hours after
+    # the match's expected_expiration_time has passed (waiting on
+    # official-result entry). The bot would otherwise open a position
+    # on a match whose outcome is already known in the real world —
+    # the dashboard's "Closes in" column would read 0h, the price
+    # might already reflect the settlement, and the position adds no
+    # signal value. 30 minutes is a conservative buffer: most pro
+    # matches don't drag past their listed start by that much, and
+    # the bot's edge on a 30-minutes-from-close market is tiny anyway.
+    min_minutes_to_close = float(
+        t.get("min_minutes_to_close_for_open", 30.0))
+    now_ts = datetime.now(timezone.utc).timestamp()
     for r in ranked:
         if len(state["open_positions"]) >= max_open:
             break
@@ -483,6 +496,24 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             continue
         if _within_cooldown(state, match_id):
             continue
+        # Skip if the market's expected_expiration_time is already past
+        # (or within ``min_minutes_to_close``). live_by_id is the
+        # canonical source — it carries the field straight off the
+        # Kalshi market payload.
+        live = live_by_id.get(match_id) or {}
+        exp = live.get("expected_expiration_time")
+        if exp:
+            try:
+                exp_ts = datetime.fromisoformat(
+                    str(exp).replace("Z", "+00:00")).timestamp()
+                mins_left = (exp_ts - now_ts) / 60.0
+                if mins_left < min_minutes_to_close:
+                    log.info("skip open %s — only %.1fmin to close "
+                              "(threshold %.0fmin)",
+                              match_id, mins_left, min_minutes_to_close)
+                    continue
+            except (TypeError, ValueError):
+                pass
         # Re-evaluate against current cfg — buy_eligible came from the
         # exporter; this is belt-and-braces against config drift between
         # exporter and simulator within one tick.
