@@ -225,6 +225,108 @@ def _settle_position(p: dict[str, Any], live_record: dict[str, Any],
     }
 
 
+def _settle_orphans_from_kalshi(state: dict[str, Any],
+                                  slippage: float) -> list[dict[str, Any]]:
+    """Close positions whose match disappeared from the live state but
+    Kalshi has already finalized.
+
+    The standard settle path at the top of ``run_simulator_tick`` reads
+    ``live_records`` — the output of ``collapse_to_matches`` over the
+    current live-market fetch. Kalshi's ``iter_open_markets`` only
+    returns ACTIVE markets; once a match settles the markets transition
+    to ``finalized`` and drop out of the open list. The bot then has no
+    matching live record for the position, so the standard settle
+    branch (``live.completed``) never fires and the position stays
+    "open" forever — a zombie that ties up the position cap.
+
+    This sweep, run after the standard path, hits Kalshi's events API
+    directly for each remaining open position. When both sides report
+    ``status == finalized``, we infer the winner from the side whose
+    ``yes_ask`` resolved near $1.00 and call ``_settle_position`` with
+    a synthesized live_record so the close uses the same P&L formula
+    as a normal settle.
+
+    Defensive: any Kalshi error / non-finalized event leaves the
+    position alone; the sweep retries on the next tick.
+    """
+    try:
+        # Lazy import to avoid pulling the SDK client at module load
+        # (keeps unit-test surface small and only constructs the client
+        # if we actually have orphans to investigate).
+        from ..data.kalshi_markets import _client
+    except Exception as exc:  # noqa: BLE001
+        log.warning("orphan sweep skipped — kalshi client unavailable: %s", exc)
+        return []
+    open_positions = state.get("open_positions") or []
+    if not open_positions:
+        return []
+    client = None
+    closed_records: list[dict[str, Any]] = []
+    still_open: list[dict[str, Any]] = []
+    for p in open_positions:
+        event_ticker = p.get("match_id")
+        if not event_ticker:
+            still_open.append(p)
+            continue
+        if client is None:
+            try:
+                client = _client()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("orphan sweep skipped — kalshi client init failed: %s", exc)
+                return []
+        try:
+            ev = client.get_event(event_ticker=event_ticker)
+            markets = ev.get("markets") or []
+        except Exception as exc:  # noqa: BLE001
+            log.warning("orphan sweep: get_event(%s) failed: %s",
+                         event_ticker, str(exc)[:140])
+            still_open.append(p)
+            continue
+        if not markets or any(
+            (m.get("status") or "").lower() != "finalized" for m in markets
+        ):
+            still_open.append(p)
+            continue
+        # Determine winner — first-by-ticker is PLAYER_A in
+        # collapse_to_matches's convention, so we replicate that here.
+        markets_sorted = sorted(markets, key=lambda x: x.get("ticker") or "")
+        a_market = markets_sorted[0]
+        a_yes_ask = float(a_market.get("yes_ask_dollars") or 0)
+        if a_yes_ask >= 0.99:
+            winner_side = "PLAYER_A"
+            market_prob_a = 1.0
+        elif (len(markets_sorted) > 1
+                and float(markets_sorted[1].get("yes_ask_dollars") or 0) >= 0.99):
+            winner_side = "PLAYER_B"
+            market_prob_a = 0.0
+        else:
+            # Ambiguous (e.g. void) — leave open, log once.
+            log.warning("orphan sweep: %s finalized but no side >= $0.99",
+                         event_ticker)
+            still_open.append(p)
+            continue
+        synthetic_live = {
+            "match_id": event_ticker,
+            "completed": True,
+            "winner_side": winner_side,
+            "market_prob_a": market_prob_a,
+        }
+        closed = _settle_position(p, synthetic_live, slippage)
+        closed["close_reason"] = "auto-settle from Kalshi (match dropped from live state)"
+        closed["result"] = "SETTLED"
+        closed_records.append(closed)
+        state.setdefault("last_settled_at_by_match_id",
+                          {})[event_ticker] = closed["closed_at"]
+        log.info("orphan-settle %s on %s — winner=%s, won=%s, P&L=%+.3f",
+                  p.get("side"), event_ticker, winner_side,
+                  closed["won"], closed["realized_pnl"])
+    state["open_positions"] = still_open
+    if closed_records:
+        state["closed_positions"] = (state.get("closed_positions")
+                                       or []) + closed_records
+    return closed_records
+
+
 def _close_at_market(p: dict[str, Any], slippage: float,
                       reason: str) -> dict[str, Any]:
     """Close a position at its current mark-to-market price. Mirrors
@@ -293,6 +395,14 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
 
     state["closed_positions"] = (state.get("closed_positions") or []) + newly_closed
     state["open_positions"] = still_open
+
+    # 1b) Orphan sweep — for any open position whose match dropped out of
+    #     ``live_records`` (Kalshi's ``iter_open_markets`` excludes
+    #     finalized markets once a match settles), query Kalshi directly
+    #     and close out the position if both sides have finalized. Stops
+    #     zombie positions from accumulating against the max_open_positions
+    #     cap when the bot misses the live-state "completed" transition.
+    _settle_orphans_from_kalshi(state, slippage)
 
     # 2) Mark-to-market the still-open positions using current watchlist data.
     wl_by_id = {str(r.get("match_id") or ""): r for r in watchlist_rows}
