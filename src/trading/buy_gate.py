@@ -51,13 +51,62 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
         max_entry_price_cents=trading_cfg.get("max_entry_price_cents"),
         slippage_pct=float(trading_cfg.get("slippage_pct", 0.02)),
     )
+    eligible = result.eligible
+    blockers = list(result.blockers)
+    gates = dict(result.gates)
+    # Extreme-edge guardrail. The SDK gate has only a min-edge floor.
+    # An edge above ``max_edge_skip`` (default 20pp) is almost always
+    # model overconfidence — sparse Elo on qualifiers, surface
+    # miscalibration, or the market pricing real-world info the
+    # historical match panel lacks. Skip the trade entirely.
+    max_edge_skip = trading_cfg.get("max_edge_skip")
+    if max_edge_skip is not None and result.side_edge is not None:
+        if abs(float(result.side_edge)) > float(max_edge_skip):
+            eligible = False
+            blockers.append(
+                f"edge_too_large_{abs(result.side_edge)*100:.0f}pp"
+                f"_(>{float(max_edge_skip)*100:.0f}pp_cap)"
+            )
+            gates["max_edge_skip"] = False
+        else:
+            gates["max_edge_skip"] = True
     return BuyDecision(
-        eligible=result.eligible,
+        eligible=eligible,
         score=result.score,
         side=result.side,
         side_edge=result.side_edge,
         side_ev=result.side_ev,
         side_market=result.side_market,
-        gates=result.gates,
-        blockers=result.blockers,
+        gates=gates,
+        blockers=blockers,
     )
+
+
+def stake_taper(edge_abs: float, trading_cfg: dict[str, Any]) -> float:
+    """Return a stake-multiplier in [taper_min_stake_frac, 1.0] for the
+    given absolute edge. Used by the simulator to scale ``bet_size`` on
+    large-but-not-extreme edges (Kelly-style variance protection).
+
+    Returns 1.0 when the taper config is absent or the edge is below
+    ``taper_edge_above``. Tapers linearly from 1.0 at ``taper_edge_above``
+    to ``taper_min_stake_frac`` at ``max_edge_skip``.
+    """
+    taper_above = trading_cfg.get("taper_edge_above")
+    max_edge = trading_cfg.get("max_edge_skip")
+    min_frac = trading_cfg.get("taper_min_stake_frac")
+    if taper_above is None or max_edge is None or min_frac is None:
+        return 1.0
+    taper_above = float(taper_above)
+    max_edge = float(max_edge)
+    min_frac = float(min_frac)
+    if edge_abs <= taper_above:
+        return 1.0
+    if edge_abs >= max_edge:
+        # Skip-cap handles this; defensive floor in case taper runs
+        # outside the buy_gate (e.g. when callers compute it directly).
+        return min_frac
+    span = max_edge - taper_above
+    if span <= 0:
+        return min_frac
+    t = (edge_abs - taper_above) / span
+    return 1.0 - t * (1.0 - min_frac)

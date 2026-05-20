@@ -40,7 +40,7 @@ from kalshi_sdk.validators import should_close_profit_lock
 
 from ..utils.config import load_config, resolve_path
 from ..utils.logging_setup import setup_logging
-from .buy_gate import evaluate as evaluate_buy
+from .buy_gate import evaluate as evaluate_buy, stake_taper
 from .ev import ev as ev_calc
 
 log = setup_logging("trading.simulator")
@@ -290,8 +290,14 @@ def _settle_orphans_from_kalshi(state: dict[str, Any],
                          event_ticker, str(exc)[:140])
             still_open.append(p)
             continue
+        # Kalshi walks resolved markets through closed → settled →
+        # finalized over hours. Accept any terminal status — matches
+        # collapse_to_matches's ``is_closed`` check in kalshi_markets.py.
+        # Previously this required exactly "finalized", which left
+        # zombie positions open for days.
         if not markets or any(
-            (m.get("status") or "").lower() != "finalized" for m in markets
+            (m.get("status") or "").lower() not in {"closed", "settled", "finalized"}
+            for m in markets
         ):
             still_open.append(p)
             continue
@@ -330,6 +336,7 @@ def _settle_orphans_from_kalshi(state: dict[str, Any],
                   closed["won"], closed["realized_pnl"])
     state["open_positions"] = still_open
     if closed_records:
+        log.info("orphan sweep settled %d position(s)", len(closed_records))
         state["closed_positions"] = (state.get("closed_positions")
                                        or []) + closed_records
     return closed_records
@@ -524,6 +531,15 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
         mkt_for_side = decision.side_market
         model_for_side = (float(r["live_prob_a"]) if side == "PLAYER_A"
                             else 1.0 - float(r["live_prob_a"]))
+        # Stake taper on large-but-not-extreme edges. The buy_gate already
+        # filtered |edge| > max_edge_skip; here we scale stake linearly
+        # from 1× at taper_edge_above to taper_min_stake_frac× at
+        # max_edge_skip, so high-edge picks (which tend to be model
+        # overconfidence) risk less capital. See feedback memory: the
+        # 2026-05-19 8-loss batch averaged +27pp edge.
+        taper_mult = stake_taper(
+            abs(float(decision.side_edge or 0.0)), t)
+        position_stake = round(stake * taper_mult, 4)
         # ── all gates passed — open the position ─────────────────────────
         side_player = r["player_a"] if side == "PLAYER_A" else r["player_b"]
         position_id = f"{match_id}-{side}-{int(datetime.now(timezone.utc).timestamp())}"
@@ -551,7 +567,7 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             "entry_market_prob": round(mkt_for_side, 4),
             "entry_model_prob": round(model_for_side, 4),
             "label_at_open": (r.get("recommended_action") or ""),
-            "stake": stake,
+            "stake": position_stake,
             "slippage": slippage,
             "opened_at": _now_iso(),
             "current_market_prob": round(mkt_for_side, 4),
@@ -562,9 +578,13 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
         state["open_positions"].append(new_p)
         open_match_ids.add(match_id)
         state["stats"]["total_opened"] = int(state["stats"].get("total_opened", 0)) + 1
-        log.info("opened %s on %s (%s vs %s) — entry %.2f, model %.2f, label %s",
+        log.info("opened %s on %s (%s vs %s) — entry %.2f, model %.2f, "
+                  "edge %+.1fpp, stake $%.2f (taper %.0f%%), label %s",
                   side, side_player, r["player_a"], r["player_b"],
-                  mkt_for_side, model_for_side, new_p["label_at_open"])
+                  mkt_for_side, model_for_side,
+                  float(decision.side_edge or 0.0) * 100.0,
+                  position_stake, taper_mult * 100.0,
+                  new_p["label_at_open"])
 
     # 4) Recompute aggregates and persist.
     state["last_tick_at"] = _now_iso()

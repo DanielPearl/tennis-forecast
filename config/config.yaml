@@ -126,6 +126,19 @@ trading:
   # settlement (risk 95¢ for ≤5¢ upside), so we lock in profit and
   # recycle capital. Shared rule with darts / table-tennis.
   profit_lock_market_prob: 0.95
+  # Extreme-edge guardrail.
+  # Edges this large are usually model overconfidence (sparse Elo for
+  # qualifiers, surface miscalibration, missing real-world info the
+  # market is pricing) rather than real signal. On 2026-05-19 the bot
+  # lost 8/8 settled trades where |edge| averaged +27pp; setting this
+  # to 0.20 would have skipped 6 of those 8.
+  max_edge_skip: 0.20
+  # Stake taper on large-but-not-extreme edges. Between
+  # ``taper_edge_above`` and ``max_edge_skip``, scale stake linearly
+  # from full to ``taper_min_stake_frac``. Acts as Kelly-style
+  # variance protection without abandoning the trade entirely.
+  taper_edge_above: 0.12
+  taper_min_stake_frac: 0.50
 
 # ---------------------------------------------------------------------
 # Dashboard. Stdlib http.server (no Flask dependency) — same pattern
