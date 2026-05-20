@@ -192,14 +192,22 @@ def _pick_side(model_prob_a: float, market_prob_a: float | None) -> tuple[str, f
 
 
 def _within_cooldown(state: dict[str, Any], match_id: str) -> bool:
-    last = state.get("last_settled_at_by_match_id", {}).get(match_id)
-    if not last:
-        return False
-    try:
-        ts = datetime.fromisoformat(last.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return False
-    return (datetime.now(timezone.utc) - ts).total_seconds() < _SAME_MATCH_COOLDOWN_SECONDS
+    """One-shot-per-ticker guard.
+
+    Used to be a 60-second cooldown after a settle on the same
+    match_id, so the bot would re-open as soon as the timer expired —
+    in practice the hedge daemon closes positions on small price
+    moves and the bot then opens a fresh one on the still-showing
+    edge, flap-trading the same match 3-5 times for net negative P&L
+    after slippage. Switching to "if we've ever traded this match,
+    skip it" eliminates the churn entirely: each match settles at
+    most once per bot instance regardless of how the price evolves.
+
+    Returns True iff the match has any prior close on record (which
+    also covers in-tick repeats — ``last_settled_at_by_match_id`` is
+    written by both the natural settle path and the hedge close).
+    """
+    return bool(state.get("last_settled_at_by_match_id", {}).get(match_id))
 
 
 def _settle_position(p: dict[str, Any], live_record: dict[str, Any],
