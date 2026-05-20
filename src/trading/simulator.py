@@ -543,6 +543,11 @@ def tick(watchlist_rows: list[dict[str, Any]], live_records: list[dict[str, Any]
             "side": side,
             "side_player": side_player,
             "title": title,
+            # Kalshi event-page heading ("Choinski vs Herbert") — the
+            # dashboard's History + Active-bets Title columns prefer
+            # this so they match what the user sees on Kalshi when
+            # they click the ticker.
+            "event_title": r.get("event_title"),
             "entry_market_prob": round(mkt_for_side, 4),
             "entry_model_prob": round(model_for_side, 4),
             "label_at_open": (r.get("recommended_action") or ""),

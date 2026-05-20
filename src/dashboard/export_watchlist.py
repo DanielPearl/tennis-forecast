@@ -136,6 +136,10 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "title_b": raw.get("title_b"),
             "title": (raw.get("title_a") if (edge_a or 0) >= 0
                        else raw.get("title_b")),
+            # Kalshi event-page heading ("Choinski vs Herbert") — what
+            # the user sees when they click the ticker. Pass it through
+            # so the dashboard's Title column matches the click target.
+            "event_title": raw.get("event_title"),
         }
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
         # buy_gates and buy_blockers using the shared evaluator (same

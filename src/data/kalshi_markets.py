@@ -334,6 +334,17 @@ def collapse_to_matches(markets: list[dict],
             # "Title" column.
             "title_a": a_market.get("title"),
             "title_b": (b_market.get("title") if b_market else None),
+            # Event-level Kalshi title (the page heading the user sees
+            # when they click through the ticker). The Kalshi event API
+            # returns this as a separate field, but the same string is
+            # the ``{lastA} vs {lastB}`` substring of every market
+            # title in the event — derive it from the title parse so
+            # we don't need an extra get_event API call per row.
+            "event_title": (
+                f"{a_title.get('lastA', '')} vs {a_title.get('lastB', '')}".strip()
+                if a_title.get("lastA") and a_title.get("lastB")
+                else None
+            ),
         })
     return out
 
