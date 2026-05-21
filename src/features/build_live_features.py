@@ -33,12 +33,23 @@ _FIELDS_NUMERIC: list[str] = [
     # the live-PV layer to widen volatility when the book is thin or the
     # spread blows out (price is less informative → trust it less).
     "open_interest", "volume", "spread_cents",
+    # Additional state surfaced for the trained in-match model
+    # (predict_inmatch.py). Optional everywhere else — the rules layer
+    # never reads them.
+    "current_set_games_a", "current_set_games_b",
+    "current_set", "best_of",
+    "first_serve_won_pct_a", "first_serve_won_pct_b",
+    "second_serve_won_pct_a", "second_serve_won_pct_b",
+    "break_points_won_a", "break_points_won_b",
+    "last10_share_a",
+    "progress",
 ]
 _FIELDS_FLAGS: list[str] = [
     "is_tiebreak", "is_decider",
     "medical_timeout",
     "injury_news_flag", "retirement_risk_flag",
     "serving_a",
+    "set_just_ended",
 ]
 
 

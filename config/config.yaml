@@ -94,6 +94,11 @@ live_rules:
   # we flag MARKET_OVERREACTION (only one direction at a time).
   overreaction_market_move: 0.07
   overreaction_model_move: 0.025
+  # Use the trained PBP-based in-match adjustment model
+  # (data/processed/artifacts/inmatch_model.joblib) instead of the
+  # rules-only nudge. Falls back to rules when the artifact is missing.
+  # Backtest on 2024 slam PBP: Brier 0.175 vs rules 0.226 (22.7% better).
+  use_trained_inmatch_model: true
 
 # ---------------------------------------------------------------------
 # Trading thresholds. Conservative on purpose: we'd rather print fewer
