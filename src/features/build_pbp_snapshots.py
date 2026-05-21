@@ -114,12 +114,22 @@ class _Running:
     # Trailing windows
     last10_winners: list[int] = None      # most-recent first
     games_won_history: list[int] = None   # 1 if P1 won that game, 2 if P2
+    # First-serve velocity series (km/h). Index 0 is the oldest first
+    # serve in the match; appended in time order. We compute both the
+    # full-match baseline and a trailing-10 mean for the
+    # ``first_serve_speed_delta_a/b`` decline feature.
+    p1_first_speeds: list[float] = None
+    p2_first_speeds: list[float] = None
 
     def __post_init__(self) -> None:
         if self.last10_winners is None:
             self.last10_winners = []
         if self.games_won_history is None:
             self.games_won_history = []
+        if self.p1_first_speeds is None:
+            self.p1_first_speeds = []
+        if self.p2_first_speeds is None:
+            self.p2_first_speeds = []
 
     def update_point(self, row: pd.Series) -> None:
         # Update last-10 sliding window
@@ -148,11 +158,19 @@ class _Running:
             serve_no = int(row["ServeNumber"])
         except (TypeError, ValueError):
             serve_no = -1
+        # Pull serve speed (km/h) once — Speed_KMH is 0 / missing on
+        # rows without a tracked serve (e.g. start-of-match placeholder).
+        try:
+            speed_kmh = float(row["Speed_KMH"])
+        except (TypeError, ValueError, KeyError):
+            speed_kmh = 0.0
         if srv == 1:
             if serve_no == 1:
                 self.p1_first_in += 1
                 if w == 1:
                     self.p1_first_won += 1
+                if speed_kmh > 50.0:  # ignore tracker dropouts
+                    self.p1_first_speeds.append(speed_kmh)
             elif serve_no == 2:
                 self.p1_second_in += 1
                 if w == 1:
@@ -162,6 +180,8 @@ class _Running:
                 self.p2_first_in += 1
                 if w == 2:
                     self.p2_first_won += 1
+                if speed_kmh > 50.0:
+                    self.p2_first_speeds.append(speed_kmh)
             elif serve_no == 2:
                 self.p2_second_in += 1
                 if w == 2:
@@ -195,7 +215,29 @@ class _Running:
             if _flag("P2BreakPointWon"):
                 self.p2_bp_won += 1
 
+    def _serve_speed_features(self, speeds: list[float]) -> tuple[float, float, float]:
+        """Return (baseline_avg, recent_avg, delta) in km/h.
+
+        ``baseline_avg`` is the mean of the player's first-serve speeds
+        across the whole match so far; ``recent_avg`` is the mean of
+        the trailing 10 first serves. ``delta = recent - baseline`` is
+        the actual decline signal — negative values mean the player is
+        serving slower than their match average, the classic tell for
+        fatigue or a developing injury. We require ≥ 5 baseline serves
+        before reporting, otherwise the noise floor is too high and
+        we return zeros.
+        """
+        n = len(speeds)
+        if n < 5:
+            return 0.0, 0.0, 0.0
+        baseline = sum(speeds) / n
+        window = min(10, n)
+        recent = sum(speeds[-window:]) / window
+        return float(baseline), float(recent), float(recent - baseline)
+
     def snapshot(self) -> dict[str, float]:
+        a_base, a_recent, a_delta = self._serve_speed_features(self.p1_first_speeds)
+        b_base, b_recent, b_delta = self._serve_speed_features(self.p2_first_speeds)
         return {
             "first_serve_pct_a": _safe_div(self.p1_first_in, self.p1_serve_pts),
             "first_serve_pct_b": _safe_div(self.p2_first_in, self.p2_serve_pts),
@@ -215,6 +257,12 @@ class _Running:
             "break_points_won_b": float(self.p2_bp_won),
             "bp_conversion_a": _safe_div(self.p1_bp_won, self.p1_bp_faced),
             "bp_conversion_b": _safe_div(self.p2_bp_won, self.p2_bp_faced),
+            "first_serve_speed_baseline_a": a_base,
+            "first_serve_speed_baseline_b": b_base,
+            "first_serve_speed_recent_a": a_recent,
+            "first_serve_speed_recent_b": b_recent,
+            "first_serve_speed_delta_a": a_delta,
+            "first_serve_speed_delta_b": b_delta,
             "last10_share_a": _safe_div(
                 sum(1 for x in self.last10_winners if x == 1),
                 len(self.last10_winners) or 1,
@@ -378,6 +426,14 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "break_points_created_a", "break_points_created_b",
     "break_points_won_a", "break_points_won_b",
     "bp_conversion_a", "bp_conversion_b",
+    # Serve velocity decline — recent trailing-10 mean of first-serve
+    # speed minus the player's match baseline. Negative values are the
+    # signal we care about (fatigue / developing injury); we include
+    # the raw baseline + recent so the model can use absolute speed
+    # for cross-player adjustment too.
+    "first_serve_speed_baseline_a", "first_serve_speed_baseline_b",
+    "first_serve_speed_recent_a", "first_serve_speed_recent_b",
+    "first_serve_speed_delta_a", "first_serve_speed_delta_b",
     "last10_share_a",
     "games_won_last_3_a", "games_won_last_3_b",
 )

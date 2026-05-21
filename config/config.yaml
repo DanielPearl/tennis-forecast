@@ -89,6 +89,10 @@ live_rules:
   decider_volatility_bump: 0.15
   medical_timeout_volatility_bump: 0.25
   injury_risk_drop_threshold: 0.05  # serve %
+  # Serve-velocity decline (trailing-10 first-serve speed minus match
+  # baseline) → nudge against the slowing player. ≥ 8 km/h drop fires
+  # the rule; this is the magnitude of the negative-direction delta.
+  serve_speed_decline_pp: 0.04
   # Market-overreaction band. If the market moved more than `overreaction_market_move`
   # while the model-adjusted probability moved less than `overreaction_model_move`,
   # we flag MARKET_OVERREACTION (only one direction at a time).

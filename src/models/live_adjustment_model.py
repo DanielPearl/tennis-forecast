@@ -144,6 +144,60 @@ def adjust(pre_match_prob_a: float, live_record: dict[str, Any]) -> LiveAdjustme
         injury = True
         delta += rules["injury_risk_drop_threshold"]
 
+    # ---- 5b) Serve velocity decline → fatigue / injury ---------------
+    # When a player's trailing-10 first-serve speed drops materially
+    # below their match baseline (≥ 8 km/h is the threshold the
+    # commentary uses), nudge the other way and flag injury volatility.
+    # Read the live_record fields populated by the live feed; absent
+    # signals leave the rule silent.
+    fs_speed_delta_a = live_record.get("first_serve_speed_delta_a")
+    fs_speed_delta_b = live_record.get("first_serve_speed_delta_b")
+    if fs_speed_delta_a is not None and float(fs_speed_delta_a) <= -8.0:
+        d = float(fs_speed_delta_a)
+        fired.append(
+            f"player_a 1st-serve speed dropped {d:.1f} km/h vs match avg — "
+            "fatigue / injury risk"
+        )
+        injury = True
+        delta -= rules.get("serve_speed_decline_pp", 0.04)
+        volatility = min(1.0, volatility + 0.10)
+    if fs_speed_delta_b is not None and float(fs_speed_delta_b) <= -8.0:
+        d = float(fs_speed_delta_b)
+        fired.append(
+            f"player_b 1st-serve speed dropped {d:.1f} km/h vs match avg — "
+            "fatigue / injury risk"
+        )
+        injury = True
+        delta += rules.get("serve_speed_decline_pp", 0.04)
+        volatility = min(1.0, volatility + 0.10)
+
+    # ---- 5c) Break-point conversion differential ---------------------
+    # Players who convert their break opportunities reliably tend to
+    # close out matches; a 25pp gap in conversion rate over a match
+    # is a real differentiator (literature: Klaassen/Magnus tennis
+    # production models). Conservative ±3pp nudge, only when both
+    # sides have faced enough BPs for the rate to be meaningful. We
+    # derive conversion from created + won so the rule fires even when
+    # the live feed doesn't carry a pre-computed ratio.
+    bp_created_a = live_record.get("break_points_created_a")
+    bp_created_b = live_record.get("break_points_created_b")
+    bp_won_a = live_record.get("break_points_won_a")
+    bp_won_b = live_record.get("break_points_won_b")
+    if (bp_created_a is not None and bp_created_b is not None
+            and bp_won_a is not None and bp_won_b is not None
+            and float(bp_created_a) >= 3 and float(bp_created_b) >= 3):
+        conv_a = float(bp_won_a) / float(bp_created_a)
+        conv_b = float(bp_won_b) / float(bp_created_b)
+        bp_diff = conv_a - conv_b
+        if abs(bp_diff) >= 0.25:
+            bp_delta = max(-0.04, min(0.04, bp_diff * 0.10))
+            delta += bp_delta
+            fired.append(
+                f"BP conversion differential {bp_diff*100:+.0f}pp "
+                f"(A={conv_a*100:.0f}% B={conv_b*100:.0f}%) "
+                f"→ {bp_delta*100:+.1f}pp on player_a"
+            )
+
     rules_prob_a = _clamp(pre_match_prob_a + delta)
 
     # ---- 6) Trained in-match model (replaces rules nudge if enabled) ---
@@ -154,7 +208,13 @@ def adjust(pre_match_prob_a: float, live_record: dict[str, Any]) -> LiveAdjustme
     model_prob_a: float | None = None
     use_model = bool(rules.get("use_trained_inmatch_model", False))
     if use_model:
-        model_prob_a = predict_inmatch.predict(live_record)
+        # Catch + ignore model failures (e.g. when the artifact was
+        # trained on an older feature set after we added new fields).
+        # The rules-only path is always a safe fallback.
+        try:
+            model_prob_a = predict_inmatch.predict(live_record)
+        except Exception:  # noqa: BLE001
+            model_prob_a = None
     if model_prob_a is not None:
         # Progress-weighted blend with the pre-match prior. Early in
         # the match the trained model has little signal (Brier improves

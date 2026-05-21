@@ -79,6 +79,18 @@ def _live_to_features(rec: dict[str, Any]) -> np.ndarray:
     bp_w_b = float(rec.get("break_points_won_b") or 0)
     bp_conv_a = (bp_w_a / bp_c_a) if bp_c_a else 0.0
     bp_conv_b = (bp_w_b / bp_c_b) if bp_c_b else 0.0
+    # Serve-velocity decline: prefer the live feed's pre-computed
+    # baseline / recent / delta when the provider populates them;
+    # otherwise fall back to zeros so the model treats the dimension
+    # as uninformative (rather than spurious "no decline" = strong
+    # signal). Same logic as bp_conversion when the provider doesn't
+    # carry break-point counts.
+    fs_speed_base_a = float(rec.get("first_serve_speed_baseline_a") or 0.0)
+    fs_speed_base_b = float(rec.get("first_serve_speed_baseline_b") or 0.0)
+    fs_speed_recent_a = float(rec.get("first_serve_speed_recent_a") or 0.0)
+    fs_speed_recent_b = float(rec.get("first_serve_speed_recent_b") or 0.0)
+    fs_speed_delta_a = float(rec.get("first_serve_speed_delta_a") or 0.0)
+    fs_speed_delta_b = float(rec.get("first_serve_speed_delta_b") or 0.0)
     last10_a = float(rec.get("last10_share_a") if rec.get("last10_share_a") is not None else 0.5)
     g_last3_a = float(rec.get("games_won_last_3_a") or 0)
     g_last3_b = float(rec.get("games_won_last_3_b") or 0)
@@ -121,6 +133,12 @@ def _live_to_features(rec: dict[str, Any]) -> np.ndarray:
         "break_points_won_b": bp_w_b,
         "bp_conversion_a": bp_conv_a,
         "bp_conversion_b": bp_conv_b,
+        "first_serve_speed_baseline_a": fs_speed_base_a,
+        "first_serve_speed_baseline_b": fs_speed_base_b,
+        "first_serve_speed_recent_a": fs_speed_recent_a,
+        "first_serve_speed_recent_b": fs_speed_recent_b,
+        "first_serve_speed_delta_a": fs_speed_delta_a,
+        "first_serve_speed_delta_b": fs_speed_delta_b,
         "last10_share_a": last10_a,
         "games_won_last_3_a": g_last3_a,
         "games_won_last_3_b": g_last3_b,

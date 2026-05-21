@@ -41,6 +41,9 @@ _FIELDS_NUMERIC: list[str] = [
     "first_serve_won_pct_a", "first_serve_won_pct_b",
     "second_serve_won_pct_a", "second_serve_won_pct_b",
     "break_points_won_a", "break_points_won_b",
+    "first_serve_speed_baseline_a", "first_serve_speed_baseline_b",
+    "first_serve_speed_recent_a", "first_serve_speed_recent_b",
+    "first_serve_speed_delta_a", "first_serve_speed_delta_b",
     "last10_share_a",
     "progress",
 ]
