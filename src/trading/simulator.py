@@ -314,9 +314,24 @@ def _settle_orphans_from_kalshi(state: dict[str, Any],
             winner_side = "PLAYER_B"
             market_prob_a = 0.0
         else:
-            # Ambiguous (e.g. void) — leave open, log once.
-            log.warning("orphan sweep: %s finalized but no side >= $0.99",
-                         event_ticker)
+            # Ambiguous (e.g. void / cancelled match) — leave the
+            # position open and warn ONCE per match.
+            #
+            # Without the dedup the comment above lied: the position
+            # stays in still_open forever (void events never reach
+            # $0.99 on either side), so the next sweep tick logs the
+            # same WARNING, and the next, and the next — ~1 per minute,
+            # ~1,267/day in production. Track which event tickers we've
+            # already complained about in state so we only warn once
+            # per match and demote subsequent ticks to DEBUG.
+            warned = state.setdefault("_orphan_sweep_warned", {})
+            if event_ticker not in warned:
+                log.warning("orphan sweep: %s finalized but no side >= $0.99 "
+                            "(suppressing further warnings for this match)",
+                            event_ticker)
+                warned[event_ticker] = True
+            else:
+                log.debug("orphan sweep: %s still ambiguous", event_ticker)
             still_open.append(p)
             continue
         synthetic_live = {
