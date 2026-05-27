@@ -1,0 +1,14 @@
+[Unit]
+Description=Tennis Forecast daily prematch retrain (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/tennis-forecast
+EnvironmentFile=-/root/kalshi/Secret Keys/.env.shared
+EnvironmentFile=-/root/gas-prices/.env
+EnvironmentFile=-/root/tennis-forecast/.env
+ExecStart=/root/tennis-forecast/.venv/bin/python /root/tennis-forecast/scripts/run_daily_prematch.py
+StandardOutput=journal
+StandardError=journal

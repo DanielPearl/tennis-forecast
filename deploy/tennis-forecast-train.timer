@@ -1,0 +1,15 @@
+[Unit]
+Description=Tennis Forecast daily retrain timer (every 24h)
+
+[Timer]
+# Re-train once a day at 05:00 UTC — well before the first ATP/WTA
+# matches of the day start (typically 09:00 UTC on European clay) so
+# the live bot opens its first positions with a freshly-fitted model
+# and an up-to-date last_match_date dict. diff_days_rest is the
+# top feature by permutation importance and is frozen at training
+# time — drifting it daily is what keeps the model honest.
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

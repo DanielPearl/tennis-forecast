@@ -38,11 +38,19 @@ python scripts/run_daily_prematch.py
 
 # systemd units. The dashboard is served by the central trading-dashboard
 # service; this bot only runs the live-monitor loop that refreshes the
-# watchlist JSON the trading dashboard reads.
+# watchlist JSON the trading dashboard reads. The daily retrain timer
+# re-fits the prematch model + last_match_date dict so diff_days_rest
+# (the top feature by permutation importance) doesn't drift stale.
 cp deploy/baseline-break-monitor.service /etc/systemd/system/
+cp deploy/tennis-forecast-train.service /etc/systemd/system/
+cp deploy/tennis-forecast-train.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now baseline-break-monitor
+systemctl enable --now tennis-forecast-train.timer
 
 echo
 echo "[deploy] up — live monitor running; dashboard served by trading-dashboard"
-echo "[deploy] logs:  journalctl -u baseline-break-monitor -f"
+echo "[deploy] retrain timer armed (next fire: \$(systemctl show -p NextElapseUSecRealtime --value tennis-forecast-train.timer))"
+echo "[deploy] logs:"
+echo "  journalctl -u baseline-break-monitor -f"
+echo "  journalctl -u tennis-forecast-train -f"
