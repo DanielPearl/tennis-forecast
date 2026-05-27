@@ -26,6 +26,7 @@ import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import brier_score_loss, log_loss
+from sklearn.model_selection import GroupKFold
 
 from ..features.build_live_features import standardize
 from ..features.build_pbp_snapshots import FEATURE_COLUMNS
@@ -142,7 +143,19 @@ def train_and_eval() -> dict:
         l2_regularization=0.5,
         random_state=int(cfg["model"]["random_state"]),
     )
-    clf = CalibratedClassifierCV(base, method="sigmoid", cv=5)
+    # Group the CV folds by match_id. Each match contributes ~25-40
+    # snapshots that all share the same ``won_a`` label; random k-fold
+    # scatters them across folds, so the inner base estimator can
+    # memorize match M's outcome from one snapshot and "predict" it
+    # on a held-out snapshot from the same match. The OUTER test
+    # split (different year) is honest, but the sigmoid calibrator
+    # would be fit on optimistic out-of-fold probabilities, producing
+    # mildly over-confident outputs on test. Switching to GroupKFold
+    # by match_id makes the inner CV honest.
+    gkf = GroupKFold(n_splits=5)
+    groups = train["match_id"].values
+    cv_splits = list(gkf.split(X_train, y_train, groups=groups))
+    clf = CalibratedClassifierCV(base, method="sigmoid", cv=cv_splits)
     clf.fit(X_train, y_train)
     p_test = clf.predict_proba(X_test)[:, 1]
 

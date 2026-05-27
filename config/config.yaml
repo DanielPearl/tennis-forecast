@@ -26,12 +26,14 @@ data:
   atp_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master
   wta_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master
   # Years pulled on `scripts/run_daily_prematch.py --refresh-data`.
-  # Keep modest for MVP — Elo only needs ~5 years to reach steady state.
-  # Conservative window for low-RAM droplets (~512MB). Tennis Elo
-  # converges fast — 5 years of history is plenty for the rating to
-  # reach steady state. Bump to 2015+ if you have 2GB+ RAM and want
-  # the marginal accuracy gain.
-  history_start_year: 2020
+  # 11-year window: enough history for surface-Elo to converge on
+  # less-frequent players (qualifiers, doubles-leaning veterans
+  # appearing in singles draws, returning juniors), while staying
+  # well under any reasonable RAM ceiling. Tennis match panels are
+  # small (~3.5k tour-level matches per tour per year ≈ 77k matches
+  # across 11 years × 2 tours, doubled to ~154k rows after y-balance
+  # mirroring — fits comfortably in well under the droplet's 512MB).
+  history_start_year: 2015
   history_end_year: 2026
   tours: ["atp", "wta"]
 

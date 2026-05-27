@@ -272,14 +272,21 @@ def _attach_oriented(out: pd.DataFrame, side: str, panel: pd.DataFrame) -> None:
 
 # Final feature list used by the model. Kept here so train + inference
 # stay in lockstep — change in one place, both code paths see it.
+#
+# Dropped from this list (formerly trained on, never available at live
+# inference time): diff_form_last5, diff_form_last10,
+# diff_avg_serve_pts_won_10, diff_avg_return_pts_won_10,
+# diff_avg_bp_saved_10. The inference path in predict.py hard-zeroed
+# these because rolling per-player buffers aren't persisted in the
+# bundle, so the trained model evaluated points it never saw at
+# training. Their permutation importance totalled ~0.009 log-loss
+# (small individually), so dropping them simplifies the train/inference
+# contract with negligible quality cost. predict.py keeps the fields
+# in its feats dict at zero for backwards-compat with older bundles —
+# select-by-feature_list ignores the extras.
 PREMATCH_FEATURES = [
     "diff_elo_pre",
     "diff_surface_elo_pre",
-    "diff_form_last5",
-    "diff_form_last10",
-    "diff_avg_serve_pts_won_10",
-    "diff_avg_return_pts_won_10",
-    "diff_avg_bp_saved_10",
     "diff_days_rest",
     "h2h_a_wins_minus_b_wins",
     "rank_diff",
