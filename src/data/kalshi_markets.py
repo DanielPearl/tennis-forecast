@@ -226,7 +226,8 @@ def fetch_tennis_markets(
 
 
 def collapse_to_matches(markets: list[dict],
-                        prev_markets_by_ticker: dict[str, dict] | None = None
+                        prev_markets_by_ticker: dict[str, dict] | None = None,
+                        live_state_by_key: dict[str, dict] | None = None,
                         ) -> list[dict]:
     """Group two-sided markets into one record per event_ticker.
 
@@ -237,6 +238,16 @@ def collapse_to_matches(markets: list[dict],
 
     ``prev_markets_by_ticker`` carries the last-tick YES asks so we
     can compute ``market_prob_a_prev`` for the overreaction rule.
+
+    ``live_state_by_key`` is the optional output of
+    ``api_tennis_live.build_state_by_key`` — a ``{name_key → state}``
+    dict from api-tennis.com's livescore endpoint. When passed in
+    AND the Kalshi match's (player_a, player_b) match a live entry,
+    the in-match state fields (set_score_a/b, current_set_games_a/b,
+    is_tiebreak, is_decider, progress, serving_a, games_won_last_3,
+    current_set, best_of) are populated with real data instead of
+    the zero defaults. ``None`` keeps the historic zero-filled
+    behaviour so callers that don't pass it see no change.
     """
     by_event: dict[str, list[dict]] = {}
     for m in markets:
@@ -291,6 +302,23 @@ def collapse_to_matches(markets: list[dict],
                 winner_side = "PLAYER_A"
             elif yb >= 99:
                 winner_side = "PLAYER_B"
+        # Merge in real in-match state when the live feed has this
+        # match. Without a feed (or with an unmatched name) we fall
+        # back to the historic zero-filled defaults so the rules
+        # layer + in-match model degrade to "pre-match prob with no
+        # adjustment" rather than crashing.
+        live_state: dict[str, Any] = {}
+        if live_state_by_key:
+            try:
+                from . import api_tennis_live
+                merged = api_tennis_live.lookup_for_kalshi(
+                    live_state_by_key, player_a, player_b,
+                )
+                if merged:
+                    live_state = merged
+            except Exception:  # noqa: BLE001 — live merge is best-effort
+                live_state = {}
+
         out.append({
             # Use the event_ticker as the canonical match_id — stable
             # across both sides + across ticks. This is the real
@@ -307,15 +335,24 @@ def collapse_to_matches(markets: list[dict],
             "round": round_code,
             "player_a": player_a,
             "player_b": player_b,
-            "set_score_a": 0, "set_score_b": 0,
-            "games_won_last_3_a": 0, "games_won_last_3_b": 0,
+            "set_score_a": int(live_state.get("set_score_a", 0)),
+            "set_score_b": int(live_state.get("set_score_b", 0)),
+            "current_set_games_a": int(live_state.get("current_set_games_a", 0)),
+            "current_set_games_b": int(live_state.get("current_set_games_b", 0)),
+            "games_won_last_3_a": int(live_state.get("games_won_last_3_a", 0)),
+            "games_won_last_3_b": int(live_state.get("games_won_last_3_b", 0)),
+            "current_set": int(live_state.get("current_set", 1)),
+            "best_of": int(live_state.get("best_of", 3)),
+            "progress": float(live_state.get("progress", 0.0)),
+            "serving_a": bool(live_state.get("serving_a", False)),
             "first_serve_pct_a": 0.62,
             "first_serve_pct_b": 0.62,
-            "is_tiebreak": False,
-            "is_decider": False,
+            "is_tiebreak": bool(live_state.get("is_tiebreak", False)),
+            "is_decider": bool(live_state.get("is_decider", False)),
             "medical_timeout": False,
             "injury_news_flag": False,
             "retirement_risk_flag": False,
+            "live_data_matched": bool(live_state),
             "market_prob_a": market_yes_a,
             "market_prob_a_prev": market_yes_a_prev,
             # Settlement signals for the simulator.
