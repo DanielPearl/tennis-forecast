@@ -175,18 +175,39 @@ def _rolling_form_features(df: pd.DataFrame) -> pd.DataFrame:
 
     for k, v in cols.items():
         df[k] = v
-    return df, h2h, last_match_date
+    # Persist the final per-player rolling-buffer averages so the
+    # inference path (predict.py) can populate the form/serve/return/
+    # bp_saved features with real values instead of zeros. Without
+    # this snapshot, those features get hardcoded to defaults at
+    # inference — which is why they used to be in
+    # ``predict.py`` as ``"diff_form_last5": 0.0`` etc.
+    rolling_snapshot: dict[str, dict[str, float]] = {}
+    all_players = (set(last5_results.keys()) | set(last10_results.keys())
+                   | set(serve_buf.keys()) | set(return_buf.keys())
+                   | set(bp_save_buf.keys()))
+    for pl in all_players:
+        rolling_snapshot[pl] = {
+            "form_last5": _avg(last5_results[pl], 0.5),
+            "form_last10": _avg(last10_results[pl], 0.5),
+            "avg_serve_pts_won_10": _avg(serve_buf[pl], 0.6),
+            "avg_return_pts_won_10": _avg(return_buf[pl], 0.4),
+            "avg_bp_saved_10": _avg(bp_save_buf[pl], 0.6),
+        }
+    return df, h2h, last_match_date, rolling_snapshot
 
 
 def build_full_panel(matches: pd.DataFrame, elo_cfg: dict | None = None
-                     ) -> tuple[pd.DataFrame, EloState, dict, dict]:
+                     ) -> tuple[pd.DataFrame, EloState, dict, dict, dict]:
     """End-to-end: enrich Sackmann match data with everything the
     pre-match model wants. Returns the wide panel + the trained Elo
     state and accumulated H2H / last-match-date dicts (used at
-    inference time)."""
+    inference time) + the per-player rolling-form snapshot for the
+    same purpose."""
     df = _serve_return_panel(matches)
     df, elo_state = build_elo_features(df, elo_cfg)
-    df, h2h_table, last_match_date = _rolling_form_features(df)
+    df, h2h_table, last_match_date, rolling_snapshot = (
+        _rolling_form_features(df)
+    )
 
     # Tournament + round encodings
     df["level_rank"] = df["tourney_level"].map(_LEVEL_RANK).fillna(1).astype(int)
@@ -197,7 +218,7 @@ def build_full_panel(matches: pd.DataFrame, elo_cfg: dict | None = None
     df["loser_rank"] = pd.to_numeric(df["loser_rank"], errors="coerce")
     df["rank_diff"] = (df["loser_rank"] - df["winner_rank"]).fillna(0.0)
 
-    return df, elo_state, h2h_table, last_match_date
+    return df, elo_state, h2h_table, last_match_date, rolling_snapshot
 
 
 def build_player_a_panel(panel: pd.DataFrame) -> pd.DataFrame:
@@ -273,20 +294,21 @@ def _attach_oriented(out: pd.DataFrame, side: str, panel: pd.DataFrame) -> None:
 # Final feature list used by the model. Kept here so train + inference
 # stay in lockstep — change in one place, both code paths see it.
 #
-# Dropped from this list (formerly trained on, never available at live
-# inference time): diff_form_last5, diff_form_last10,
-# diff_avg_serve_pts_won_10, diff_avg_return_pts_won_10,
-# diff_avg_bp_saved_10. The inference path in predict.py hard-zeroed
-# these because rolling per-player buffers aren't persisted in the
-# bundle, so the trained model evaluated points it never saw at
-# training. Their permutation importance totalled ~0.009 log-loss
-# (small individually), so dropping them simplifies the train/inference
-# contract with negligible quality cost. predict.py keeps the fields
-# in its feats dict at zero for backwards-compat with older bundles —
-# select-by-feature_list ignores the extras.
+# Phase 2 restored the form/serve/return/bp_saved diff features.
+# Previously these were dropped because predict.py hardcoded them to
+# zero (no rolling-buffer snapshot was persisted in the bundle).
+# train_prematch_model now writes ``rolling_form_state.joblib`` —
+# the final per-player rolling averages — and predict.py looks them
+# up at inference, so all 12 features get real values both at train
+# AND inference time.
 PREMATCH_FEATURES = [
     "diff_elo_pre",
     "diff_surface_elo_pre",
+    "diff_form_last5",
+    "diff_form_last10",
+    "diff_avg_serve_pts_won_10",
+    "diff_avg_return_pts_won_10",
+    "diff_avg_bp_saved_10",
     "diff_days_rest",
     "h2h_a_wins_minus_b_wins",
     "rank_diff",

@@ -92,8 +92,8 @@ def train_and_persist() -> dict[str, Any]:
     save_clean(matches)
 
     log.info("building feature panel (Elo + form + serve/return)…")
-    panel, elo_state, h2h_table, last_match_date = build_full_panel(
-        matches, elo_cfg=cfg["elo"]
+    panel, elo_state, h2h_table, last_match_date, rolling_snapshot = (
+        build_full_panel(matches, elo_cfg=cfg["elo"])
     )
     oriented = build_player_a_panel(panel)
     oriented = oriented.sort_values("tourney_date").reset_index(drop=True)
@@ -179,6 +179,15 @@ def train_and_persist() -> dict[str, Any]:
     rest_path = artifacts_dir / "last_match_date.joblib"
     joblib.dump({k: pd.Timestamp(v).isoformat() for k, v in last_match_date.items()},
                 rest_path)
+
+    # Per-player rolling-form snapshot — Phase 2. Without this the
+    # inference path in predict.py would have to hardcode form/serve/
+    # return/bp_saved features to zero, which is the bug we just
+    # fixed. ~250k players × 5 floats × 8 bytes ≈ 10MB.
+    rolling_path = artifacts_dir / "rolling_form_state.joblib"
+    joblib.dump(rolling_snapshot, rolling_path)
+    log.info("wrote rolling form state → %s (%d players)",
+             rolling_path, len(rolling_snapshot))
 
     # Dump logistic regression coefficients next to metrics so the
     # downstream dashboard can show "model coefficients" on its card.

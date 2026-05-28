@@ -37,6 +37,7 @@ _BUNDLE_MTIME: float = 0.0
 _ELO: EloState | None = None
 _H2H: dict | None = None
 _LAST_MATCH: dict[str, pd.Timestamp] | None = None
+_ROLLING: dict[str, dict[str, float]] | None = None
 
 
 def _artifacts_dir() -> Path:
@@ -60,12 +61,20 @@ def _ensure_loaded() -> None:
     h2h = joblib.load(art / "h2h_table.joblib")
     rest = joblib.load(art / "last_match_date.joblib")
     rest = {k: pd.Timestamp(v) for k, v in rest.items()}
+    # Rolling form state — present from the Phase-2 retrain onward;
+    # gracefully empty for bundles trained before the snapshot existed
+    # (predict() falls back to the same defaults the trainer's
+    # _avg helper uses).
+    rolling_path = art / "rolling_form_state.joblib"
+    rolling = joblib.load(rolling_path) if rolling_path.exists() else {}
     was_reload = _BUNDLE is not None
     _BUNDLE = bundle
     _BUNDLE_MTIME = current_mtime
     _ELO = elo
     _H2H = h2h
     _LAST_MATCH = rest
+    global _ROLLING
+    _ROLLING = rolling
     if was_reload:
         log.info(
             "predict bundle reloaded from disk (mtime=%s) — daily "
@@ -125,18 +134,23 @@ def predict_match(
         ref = pd.Timestamp(match_date)
 
     elo_feats = lookup_pair_features(_ELO, player_a, player_b, surface)
+    # Phase-2: look up each player's persisted rolling-form snapshot.
+    # When the bundle predates the snapshot OR the player isn't in
+    # the snapshot (debutant, name mismatch), fall back to the same
+    # neutral defaults the trainer's _avg helper used so the trained
+    # weights see a familiar input.
+    ra = (_ROLLING or {}).get(player_a, {})
+    rb = (_ROLLING or {}).get(player_b, {})
+    def _diff(key: str, default: float) -> float:
+        return float(ra.get(key, default)) - float(rb.get(key, default))
     feats = {
         "diff_elo_pre": elo_feats["elo_diff"],
         "diff_surface_elo_pre": elo_feats["surface_elo_diff"],
-        # Rolling form: we don't keep per-player buffers in the
-        # persisted bundle for MVP — the Elo signal absorbs most of
-        # the form information anyway. Set to 0 (= no informative
-        # difference between the two players).
-        "diff_form_last5": 0.0,
-        "diff_form_last10": 0.0,
-        "diff_avg_serve_pts_won_10": 0.0,
-        "diff_avg_return_pts_won_10": 0.0,
-        "diff_avg_bp_saved_10": 0.0,
+        "diff_form_last5": _diff("form_last5", 0.5),
+        "diff_form_last10": _diff("form_last10", 0.5),
+        "diff_avg_serve_pts_won_10": _diff("avg_serve_pts_won_10", 0.6),
+        "diff_avg_return_pts_won_10": _diff("avg_return_pts_won_10", 0.4),
+        "diff_avg_bp_saved_10": _diff("avg_bp_saved_10", 0.6),
         "diff_days_rest": _days_rest(player_a, ref) - _days_rest(player_b, ref),
         "h2h_a_wins_minus_b_wins": float(_h2h_diff(player_a, player_b)),
         "rank_diff": float((rank_b or 500) - (rank_a or 500)),
