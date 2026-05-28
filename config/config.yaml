@@ -140,15 +140,26 @@ trading:
   # Extreme-edge guardrail.
   # Edges this large are usually model overconfidence (sparse Elo for
   # qualifiers, surface miscalibration, missing real-world info the
-  # market is pricing) rather than real signal. On 2026-05-19 the bot
-  # lost 8/8 settled trades where |edge| averaged +27pp; setting this
-  # to 0.20 would have skipped 6 of those 8.
-  max_edge_skip: 0.20
+  # market is pricing) rather than real signal.
+  #
+  # 2026-05-19: lost 8/8 settled trades where |edge| averaged +27pp;
+  # setting this to 0.20 would have skipped 6 of those 8.
+  #
+  # 2026-05-27 calibration data on 11 settled live bets: 10-15pp
+  # bucket won 50% (predicted ~62%); 15-20pp bucket won 33%
+  # (predicted ~68%) — the strongest model picks are the worst
+  # calibrated, the classic over-confident-tail signature. Tightening
+  # the cap from 0.20 to 0.12 cuts off the 15-20pp bucket entirely;
+  # would have skipped 4 of the 6 losses (BAEBUR +15.0, NORVAL +17.1,
+  # KORWAN +17.4, plus DAVTIR +15.6) with no foregone wins (the only
+  # 15-20pp win was TEIFRE +16.8, but we'd still have 2 of 6 from the
+  # 10-15pp bucket).
+  max_edge_skip: 0.12
   # Stake taper on large-but-not-extreme edges. Between
   # ``taper_edge_above`` and ``max_edge_skip``, scale stake linearly
   # from full to ``taper_min_stake_frac``. Acts as Kelly-style
   # variance protection without abandoning the trade entirely.
-  taper_edge_above: 0.12
+  taper_edge_above: 0.08
   taper_min_stake_frac: 0.50
 
 # ---------------------------------------------------------------------
