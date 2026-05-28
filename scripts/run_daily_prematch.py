@@ -71,6 +71,57 @@ def main() -> None:
     csv_path, json_path = export()
     log.info("watchlist ready: %s", json_path)
 
+    # Calibrate against our actual Kalshi bets — writes
+    # ``data/processed/artifacts/kalshi_calibration.json`` with
+    # Brier / log-loss / accuracy / calibration buckets over every
+    # tennis settlement we've placed. The dashboard's Models tab
+    # renders this alongside the held-out (Sackmann-based) metrics
+    # so we always know whether the live model is staying accurate
+    # on real money. Wrapped — any auth/network failure shouldn't
+    # fail the retrain.
+    try:
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+        from src.data.kalshi_sync import (
+            compute_calibration, fetch_enriched_bets,
+        )
+        from src.utils.config import load_config as _lc, resolve_path as _rp
+        sim_state_paths = [
+            _REPO / "data/outputs-live/sim_state.json",
+            _REPO / "data/outputs/sim_state.json",
+        ]
+        rows = fetch_enriched_bets(sim_state_paths)
+        metrics = compute_calibration(rows)
+        metrics["generated_at"] = _dt.now(_tz.utc).isoformat(timespec="seconds")
+        metrics["recent_bets"] = [
+            {
+                "ticker": r.get("ticker"),
+                "settled_time": r.get("settled_time"),
+                "side_player": r.get("side_player"),
+                "winner_name": r.get("winner_name"),
+                "tournament": r.get("tournament"),
+                "won": bool(r.get("won")),
+                "entry_model_prob": r.get("entry_model_prob"),
+            }
+            for r in rows
+        ]
+        artifacts_dir = _rp(_lc()["paths"]["artifacts_dir"])
+        out = artifacts_dir / "kalshi_calibration.json"
+        with out.open("w", encoding="utf-8") as f:
+            _json.dump(metrics, f, indent=2)
+        log.info(
+            "kalshi calibration: n=%s brier=%s acc=%s win_rate=%s",
+            metrics["n"],
+            (f"{metrics['brier']:.4f}"
+             if metrics["brier"] is not None else "—"),
+            (f"{metrics['accuracy']:.3f}"
+             if metrics["accuracy"] is not None else "—"),
+            (f"{metrics['win_rate']:.3f}"
+             if metrics["win_rate"] is not None else "—"),
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the retrain
+        log.warning("kalshi calibration sync failed: %s", exc)
+
 
 if __name__ == "__main__":
     main()
