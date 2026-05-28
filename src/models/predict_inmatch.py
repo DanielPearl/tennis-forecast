@@ -14,7 +14,6 @@ model effectively defaulting toward 0.5 on those dimensions.
 """
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,16 +32,35 @@ def _artifact_path() -> Path:
     return resolve_path(cfg["paths"]["artifacts_dir"]) / "inmatch_model.joblib"
 
 
-@lru_cache(maxsize=1)
+# Module-level cache with mtime auto-reload — same pattern as predict.py.
+# An lru_cache here would never reload when ``--retrain-inmatch`` writes
+# a fresh artifact; the dashboard process would silently keep using the
+# stale model forever. Stat-and-reload costs microseconds per call.
+_MODEL = None
+_MODEL_MTIME: float = 0.0
+
+
 def _load_model():
+    global _MODEL, _MODEL_MTIME
     path = _artifact_path()
     if not path.exists():
         return None
     try:
-        return joblib.load(path)
+        current_mtime = path.stat().st_mtime
+    except OSError:
+        current_mtime = 0.0
+    if _MODEL is not None and current_mtime == _MODEL_MTIME:
+        return _MODEL
+    try:
+        loaded = joblib.load(path)
     except Exception as exc:  # noqa: BLE001 — surface any deserialize problem
         log.warning("failed to load %s: %s", path, exc)
-        return None
+        return _MODEL  # serve stale rather than None on a transient error
+    if _MODEL is not None:
+        log.info("inmatch model reloaded (mtime changed)")
+    _MODEL = loaded
+    _MODEL_MTIME = current_mtime
+    return _MODEL
 
 
 def model_available() -> bool:

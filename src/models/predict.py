@@ -22,10 +22,18 @@ from .train_prematch_model import load_elo_state
 log = setup_logging("models.predict")
 
 
-# Round-trip the heavyweight artefacts once per process. Loading the
+# Round-trip the heavyweight artefacts once per process — loading the
 # model bundle is ~50ms but the Elo dict can be ~5MB across all tours,
 # and the dashboard re-renders many times per minute.
+#
+# Auto-reload: on every ``_ensure_loaded`` call we stat the bundle's
+# joblib and reload all four artifacts when the file is newer than
+# the cached load time. A stat() call is microseconds; this is the
+# only sane way to make the daily retrain timer (which writes a
+# fresh bundle at 05:00 UTC) actually take effect in the live
+# dashboard process without requiring an operator-driven restart.
 _BUNDLE = None
+_BUNDLE_MTIME: float = 0.0
 _ELO: EloState | None = None
 _H2H: dict | None = None
 _LAST_MATCH: dict[str, pd.Timestamp] | None = None
@@ -37,19 +45,34 @@ def _artifacts_dir() -> Path:
 
 
 def _ensure_loaded() -> None:
-    global _BUNDLE, _ELO, _H2H, _LAST_MATCH
-    if _BUNDLE is not None:
-        return
+    global _BUNDLE, _BUNDLE_MTIME, _ELO, _H2H, _LAST_MATCH
     art = _artifacts_dir()
-    bundle = joblib.load(art / "prematch_model.joblib")
+    model_path = art / "prematch_model.joblib"
+    try:
+        current_mtime = model_path.stat().st_mtime
+    except OSError:
+        current_mtime = 0.0
+    # Cache hit: bundle loaded AND artifact hasn't been rewritten.
+    if _BUNDLE is not None and current_mtime == _BUNDLE_MTIME:
+        return
+    bundle = joblib.load(model_path)
     elo = load_elo_state(joblib.load(art / "elo_state.joblib"))
     h2h = joblib.load(art / "h2h_table.joblib")
     rest = joblib.load(art / "last_match_date.joblib")
     rest = {k: pd.Timestamp(v) for k, v in rest.items()}
+    was_reload = _BUNDLE is not None
     _BUNDLE = bundle
+    _BUNDLE_MTIME = current_mtime
     _ELO = elo
     _H2H = h2h
     _LAST_MATCH = rest
+    if was_reload:
+        log.info(
+            "predict bundle reloaded from disk (mtime=%s) — daily "
+            "retrain has been picked up without process restart",
+            pd.Timestamp(current_mtime, unit="s")
+            .strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
 
 def _h2h_diff(player_a: str, player_b: str) -> int:
