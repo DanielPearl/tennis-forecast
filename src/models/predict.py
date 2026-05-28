@@ -151,9 +151,24 @@ def predict_match(
         + bundle["blend_weight_logistic"] * p_log
     )
     blended = max(0.01, min(0.99, blended))
+    # Apply the live-bet calibration layer — rescales over-confident
+    # predictions toward their empirical win rate using the Platt fit
+    # over our own Kalshi outcomes. Pass-through when no calibration
+    # JSON exists yet; ramps in linearly with sample size.
+    raw_blended = blended
+    try:
+        from . import calibration_layer
+        calibration_layer_path = _artifacts_dir() / "kalshi_calibration.json"
+        blended = calibration_layer.recalibrate(
+            blended, calibration_layer_path,
+        )
+    except Exception:  # noqa: BLE001 — never let calibration fail prediction
+        log.warning("calibration_layer failed; serving raw model prob",
+                    exc_info=True)
     return {
         "prob_a": blended,
         "prob_b": 1.0 - blended,
+        "raw_model_prob_a": raw_blended,  # pre-recalibration view
         "elo_winprob_a": elo_feats["elo_winprob_a"],
         "feats": feats,
         "elo": elo_feats,
