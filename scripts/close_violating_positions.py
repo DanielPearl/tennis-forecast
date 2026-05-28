@@ -158,7 +158,7 @@ def main() -> int:
         return 0
 
     print("placing IOC sell orders...")
-    placed = 0
+    placed: list[dict] = []
     failed = 0
     for v in violators:
         ticker = v["ticker"]
@@ -182,14 +182,51 @@ def main() -> int:
             status = order.get("status") or "?"
             print(f"  CLOSED {ticker} at {bid}¢ — order_id={order_id} "
                   f"status={status}")
-            placed += 1
+            placed.append({**v, "order_id": order_id, "status": status})
         except Exception as exc:  # noqa: BLE001
             print(f"  FAILED {ticker} at {bid}¢ — {exc!r}")
             failed += 1
 
+    # Patch sim_state with the actual sell prices. The executor's
+    # reconcile loop alone can't recover the right P&L here: it sees
+    # the position dropped from kalshi_open and tries to settle via
+    # _settle_price_cents, but settlement_value is None (market still
+    # active) and last_price is None (Kalshi hasn't propagated the
+    # trade yet), so the new defer-don't-guess logic correctly keeps
+    # the position open … forever. Updating sim_state directly here
+    # is the cleanest path — same write path as the executor uses.
+    if placed:
+        sold_tickers = {p["ticker"] for p in placed}
+        still_open = [p for p in opens if p.get("ticker") not in sold_tickers]
+        newly_closed: list[dict] = []
+        for sold in placed:
+            orig = next((o for o in opens
+                          if o.get("ticker") == sold["ticker"]), {})
+            sell_prob = sold["current_yes_bid_cents"] / 100.0
+            entry_prob = float(orig.get("entry_market_prob") or 0.0)
+            contracts = int(orig.get("contracts") or 1)
+            realized = (sell_prob - entry_prob) * contracts
+            closed_rec = dict(orig)
+            closed_rec.update({
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "settle_market_prob": sell_prob,
+                "realized_pnl": realized,
+                "won": realized > 0,
+                "close_reason": "manual_close_violating_gate",
+                "result": "MANUAL_CLOSE",
+                "exit_order_id": sold["order_id"],
+            })
+            newly_closed.append(closed_rec)
+        state["open_positions"] = still_open
+        state.setdefault("closed_positions", []).extend(newly_closed)
+        with state_path.open("w", encoding="utf-8") as f:
+            json.dump(state, f, separators=(",", ":"))
+        print()
+        print(f"patched sim_state: removed {len(newly_closed)} from open, "
+              f"added to closed with realized P&L")
+
     print()
-    print(f"placed {placed} sells, {failed} failures. Reconcile will "
-          f"pick up the executions on the next bot tick.")
+    print(f"placed {len(placed)} sells, {failed} failures.")
     return 0 if not failed else 1
 
 
