@@ -154,7 +154,13 @@ trading:
   # KORWAN +17.4, plus DAVTIR +15.6) with no foregone wins (the only
   # 15-20pp win was TEIFRE +16.8, but we'd still have 2 of 6 from the
   # 10-15pp bucket).
-  max_edge_skip: 0.12
+  #
+  # Raised 0.12 → 0.18 after the Platt calibration layer started
+  # blending toward observed Kalshi outcomes — the layer corrects
+  # part of the over-confidence inside the gate's window, so the
+  # 12pp ceiling was too tight (bot was sitting on 2 positions and
+  # skipping +19-23pp edges on JODZVE / FONMEN).
+  max_edge_skip: 0.18
   # Stake taper on large-but-not-extreme edges. Between
   # ``taper_edge_above`` and ``max_edge_skip``, scale stake linearly
   # from full to ``taper_min_stake_frac``. Acts as Kelly-style
