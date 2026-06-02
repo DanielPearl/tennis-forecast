@@ -79,8 +79,14 @@ model:
 live_rules:
   # Each completed game shifts the baseline toward the in-match leader
   # by `per_game_weight`, capped at `max_in_match_shift`.
-  per_game_weight: 0.012
-  max_in_match_shift: 0.10
+  #
+  # Zeroed 2026-06-02: live adjustment was adding overconfidence on
+  # top of an already-imperfect pre-match calibration. Setting weight
+  # to 0 here AND ``use_trained_inmatch_model: false`` below makes
+  # live_prob_a = pre_match_prob_a, so the bot trades on the
+  # Platt-calibrated pre-match prediction with no in-match nudge.
+  per_game_weight: 0.0
+  max_in_match_shift: 0.0
   # First-serve % drop ≥ this much vs match average → fatigue/injury hint.
   first_serve_pct_drop_flag: 0.10
   # If serve % is unusually strong, flag "underlying stats remain strong"
@@ -104,7 +110,15 @@ live_rules:
   # (data/processed/artifacts/inmatch_model.joblib) instead of the
   # rules-only nudge. Falls back to rules when the artifact is missing.
   # Backtest on 2024 slam PBP: Brier 0.175 vs rules 0.226 (22.7% better).
-  use_trained_inmatch_model: true
+  #
+  # Disabled 2026-06-02: on 30 real Kalshi bets, the live-prob bucket
+  # 55-65% won only 40% (15pp overconfident) and average live_prob
+  # for losers (50.1%) exceeded average for winners (47.0%) — a sign
+  # the in-match adjustment is adding noise/bias rather than signal.
+  # Until we rebuild the pre-match model and re-train an inmatch
+  # variant on top of that, the bot trades on calibrated pre-match
+  # prob only (per_game_weight=0 below also zeroes the rules layer).
+  use_trained_inmatch_model: false
 
 # ---------------------------------------------------------------------
 # Trading thresholds. Conservative on purpose: we'd rather print fewer
