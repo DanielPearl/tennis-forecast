@@ -71,6 +71,12 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             rank_a=raw.get("rank_a"), rank_b=raw.get("rank_b"),
         )
         pre_prob_a = pre["prob_a"]
+        # Surface which prediction path was used so the live executor
+        # can refuse to place orders when the row's prob came from
+        # the Elo-only or 50/50 fallback (i.e. the trained model
+        # isn't loadable). Anything other than ``"trained"`` should
+        # gate out new orders on the consuming side.
+        model_source = pre.get("model_source", "trained")
 
         adj = live_adjust(pre_prob_a, rec)
         live_prob_a = adj.live_prob_a
@@ -105,6 +111,7 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "round_label": _round_label(raw.get("level", "A"), raw.get("round", "")),
             "pre_match_prob_a": round(pre_prob_a, 4),
             "pre_match_prob_b": round(1 - pre_prob_a, 4),
+            "model_source": model_source,
             "live_prob_a": round(live_prob_a, 4),
             "live_prob_b": round(1 - live_prob_a, 4),
             "market_prob_a": round(market_prob_a, 4) if market_prob_a is not None else None,

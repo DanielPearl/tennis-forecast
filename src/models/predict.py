@@ -186,6 +186,11 @@ def predict_match(
         "elo_winprob_a": elo_feats["elo_winprob_a"],
         "feats": feats,
         "elo": elo_feats,
+        # ``model_source`` propagates through the watchlist so the live
+        # executor can refuse to place orders when the prob came from
+        # a fallback path (Elo-only or literal 50/50). Anything other
+        # than ``"trained"`` means "no real prediction; don't bet".
+        "model_source": "trained",
     }
 
 
@@ -197,16 +202,23 @@ def predict_with_elo_only(player_a: str, player_b: str, surface: str = "Hard"
     _ensure_loaded() if (_BUNDLE is not None) else None
     if _ELO is None:
         # Even the elo bundle is missing — return a literal 50/50.
-        return {"prob_a": 0.5, "prob_b": 0.5, "elo_winprob_a": 0.5}
+        return {"prob_a": 0.5, "prob_b": 0.5, "elo_winprob_a": 0.5,
+                "model_source": "default_50_50"}
     f = lookup_pair_features(_ELO, player_a, player_b, surface)
     p = max(0.05, min(0.95, f["elo_winprob_a"]))
-    return {"prob_a": p, "prob_b": 1.0 - p, "elo_winprob_a": f["elo_winprob_a"]}
+    return {"prob_a": p, "prob_b": 1.0 - p,
+            "elo_winprob_a": f["elo_winprob_a"],
+            "model_source": "elo_only"}
 
 
 def safe_predict(*args, **kwargs) -> dict[str, Any]:
     """Try the trained model, fall back to Elo-only if any artefact
     is missing. The dashboard prefers always rendering *something*
-    over erroring."""
+    over erroring. The returned dict's ``model_source`` field tells
+    the caller which path produced the probability (``"trained"`` /
+    ``"elo_only"`` / ``"default_50_50"``) so safety gates like the
+    live executor's "no real prediction → no bets" rule can refuse
+    fallback-derived rows."""
     try:
         return predict_match(*args, **kwargs)
     except Exception as exc:
@@ -216,4 +228,5 @@ def safe_predict(*args, **kwargs) -> dict[str, Any]:
             surface = kwargs.get("surface", args[2] if len(args) > 2 else "Hard")
             return predict_with_elo_only(player_a, player_b, surface)
         except Exception:
-            return {"prob_a": 0.5, "prob_b": 0.5, "elo_winprob_a": 0.5}
+            return {"prob_a": 0.5, "prob_b": 0.5, "elo_winprob_a": 0.5,
+                    "model_source": "default_50_50"}
