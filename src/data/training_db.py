@@ -35,6 +35,133 @@ import pandas as pd
 
 
 _SCHEMA = """
+-- ── Normalised relational schema (the v2 design) ───────────────────
+-- 6 tables FK-connected. ``training_matches`` and ``kalshi_outcomes``
+-- below are the legacy flat tables — kept around because the trainer
+-- writes to ``training_matches`` and the dashboard's legacy queries
+-- still read it. The new tables below mirror the same data in a
+-- normalised shape for queries that JOIN across stats / outcomes /
+-- bets.
+
+CREATE TABLE IF NOT EXISTS players (
+    player_id       TEXT    PRIMARY KEY,
+    name            TEXT    NOT NULL,
+    tour            TEXT,
+    country         TEXT,
+    hand            TEXT,
+    height_cm       INTEGER,
+    first_seen_date TEXT,
+    last_seen_date  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_players_name ON players (name);
+CREATE INDEX IF NOT EXISTS idx_players_tour ON players (tour);
+
+CREATE TABLE IF NOT EXISTS tournaments (
+    tourney_id      TEXT    PRIMARY KEY,
+    name            TEXT,
+    tour            TEXT,
+    surface         TEXT,
+    level           TEXT,
+    draw_size       INTEGER,
+    year            INTEGER,
+    start_date      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tournaments_year ON tournaments (year);
+
+CREATE TABLE IF NOT EXISTS matches (
+    match_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    tourney_id          TEXT    REFERENCES tournaments (tourney_id),
+    match_date          TEXT    NOT NULL,
+    round               TEXT,
+    match_num           INTEGER,
+    best_of             INTEGER,
+    minutes             INTEGER,
+    score               TEXT,
+    winner_id           TEXT    REFERENCES players (player_id),
+    loser_id            TEXT    REFERENCES players (player_id),
+    winner_seed         INTEGER,
+    loser_seed          INTEGER,
+    winner_entry        TEXT,
+    loser_entry         TEXT,
+    winner_age          REAL,
+    loser_age           REAL,
+    winner_rank         INTEGER,
+    loser_rank          INTEGER,
+    winner_rank_points  INTEGER,
+    loser_rank_points   INTEGER,
+    UNIQUE (tourney_id, match_num, round, winner_id, loser_id)
+);
+CREATE INDEX IF NOT EXISTS idx_matches_date ON matches (match_date);
+CREATE INDEX IF NOT EXISTS idx_matches_tourney ON matches (tourney_id);
+CREATE INDEX IF NOT EXISTS idx_matches_winner ON matches (winner_id);
+CREATE INDEX IF NOT EXISTS idx_matches_loser ON matches (loser_id);
+
+CREATE TABLE IF NOT EXISTS match_stats (
+    match_id             INTEGER NOT NULL REFERENCES matches (match_id),
+    player_id            TEXT    NOT NULL REFERENCES players (player_id),
+    is_winner            INTEGER NOT NULL,
+    aces                 INTEGER,
+    double_faults        INTEGER,
+    serve_points         INTEGER,
+    first_serves_in      INTEGER,
+    first_serves_won     INTEGER,
+    second_serves_won    INTEGER,
+    service_games        INTEGER,
+    break_points_saved   INTEGER,
+    break_points_faced   INTEGER,
+    PRIMARY KEY (match_id, player_id)
+);
+
+CREATE TABLE IF NOT EXISTS match_features (
+    feature_row_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id                  INTEGER NOT NULL REFERENCES matches (match_id),
+    orientation               TEXT    NOT NULL,  -- 'a_winner' or 'a_loser'
+    player_a_id               TEXT    REFERENCES players (player_id),
+    player_b_id               TEXT    REFERENCES players (player_id),
+    label                     INTEGER NOT NULL,
+    used_in_split             TEXT,
+    diff_elo_pre              REAL,
+    diff_surface_elo_pre      REAL,
+    diff_form_last5           REAL,
+    diff_form_last10          REAL,
+    diff_avg_serve_pts_won_10 REAL,
+    diff_avg_return_pts_won_10 REAL,
+    diff_avg_bp_saved_10      REAL,
+    diff_days_rest            REAL,
+    h2h_a_wins_minus_b_wins   REAL,
+    rank_diff                 REAL,
+    level_rank                REAL,
+    round_rank                REAL,
+    UNIQUE (match_id, orientation)
+);
+CREATE INDEX IF NOT EXISTS idx_match_features_match
+    ON match_features (match_id);
+
+CREATE TABLE IF NOT EXISTS kalshi_bets (
+    bet_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker          TEXT    UNIQUE NOT NULL,
+    event_ticker    TEXT,
+    match_id        INTEGER REFERENCES matches (match_id),
+    side_player_id  TEXT    REFERENCES players (player_id),
+    side_tricode    TEXT,
+    other_tricode   TEXT,
+    market_result   TEXT,
+    settle_value    INTEGER,
+    won             INTEGER,
+    entry_price     REAL,
+    settle_price    REAL,
+    realized_pnl    REAL,
+    fee_cost        REAL,
+    opened_at       TEXT,
+    closed_at       TEXT,
+    synced_at       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kalshi_bets_match
+    ON kalshi_bets (match_id);
+CREATE INDEX IF NOT EXISTS idx_kalshi_bets_closed
+    ON kalshi_bets (closed_at);
+
+-- ── Legacy flat tables (still written by the trainer + sync) ──────
 CREATE TABLE IF NOT EXISTS training_matches (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
     tourney_date                TEXT    NOT NULL,
@@ -410,6 +537,195 @@ def _hand_match(a, b) -> Optional[int]:
     return 1 if str(a) == str(b) else 0
 
 
+def populate_normalized_tables(
+    db_path: str | Path,
+    matches_csv_path: str | Path,
+) -> Dict[str, int]:
+    """One-shot populate (or refresh) the v2 normalised tables from
+    ``matches_clean.csv``: players, tournaments, matches, match_stats.
+
+    Idempotent — uses ``INSERT OR REPLACE`` on every table's natural
+    key so re-running just refreshes any value that changed.
+
+    Returns a dict with the row count written per table.
+    """
+    src = pd.read_csv(matches_csv_path, low_memory=False)
+    src["tourney_date_str"] = pd.to_datetime(
+        src["tourney_date"], errors="coerce",
+    ).dt.strftime("%Y-%m-%d")
+    src["year"] = pd.to_datetime(
+        src["tourney_date"], errors="coerce",
+    ).dt.year
+    # tour comes in as ``atp``/``wta`` — normalise to uppercase to
+    # match what the dashboard's filters use.
+    src["tour"] = src["tour"].fillna("").str.upper()
+
+    # ── Players ──────────────────────────────────────────────────────
+    # Concatenate winner + loser rosters, then dedupe by player_id
+    # keeping the most-recent record so name spelling / height
+    # corrections propagate.
+    w = src.rename(columns={
+        "winner_id": "player_id", "winner_name": "name",
+        "winner_hand": "hand", "winner_ht": "height_cm",
+        "winner_ioc": "country",
+    })[["player_id", "name", "tour", "country", "hand", "height_cm",
+         "tourney_date_str"]]
+    l = src.rename(columns={
+        "loser_id": "player_id", "loser_name": "name",
+        "loser_hand": "hand", "loser_ht": "height_cm",
+        "loser_ioc": "country",
+    })[["player_id", "name", "tour", "country", "hand", "height_cm",
+         "tourney_date_str"]]
+    roster = pd.concat([w, l], ignore_index=True)
+    roster = roster.dropna(subset=["player_id"])
+    roster["player_id"] = roster["player_id"].astype(str)
+    roster = roster.sort_values("tourney_date_str")
+    first_seen = roster.groupby("player_id")["tourney_date_str"].first()
+    last_seen = roster.groupby("player_id")["tourney_date_str"].last()
+    latest = roster.drop_duplicates("player_id", keep="last")
+    latest = latest.merge(first_seen.rename("first_seen_date"),
+                            left_on="player_id", right_index=True)
+    latest = latest.merge(last_seen.rename("last_seen_date"),
+                            left_on="player_id", right_index=True)
+
+    # ── Tournaments ──────────────────────────────────────────────────
+    tdf = src.drop_duplicates("tourney_id")[[
+        "tourney_id", "tourney_name", "tour", "surface", "tourney_level",
+        "draw_size", "year", "tourney_date_str",
+    ]].copy()
+    tdf = tdf.dropna(subset=["tourney_id"])
+
+    # ── Matches ──────────────────────────────────────────────────────
+    mdf = src.copy()
+    mdf["match_natural_key"] = (
+        mdf["tourney_id"].astype(str) + "|"
+        + mdf["match_num"].astype(str) + "|"
+        + mdf["round"].fillna("").astype(str) + "|"
+        + mdf["winner_id"].astype(str) + "|"
+        + mdf["loser_id"].astype(str)
+    )
+
+    n_players = 0
+    n_tourneys = 0
+    n_matches = 0
+    n_stats = 0
+    with connect(db_path) as conn:
+        # players
+        conn.execute("BEGIN")
+        for r in latest.itertuples(index=False):
+            conn.execute(
+                "INSERT OR REPLACE INTO players "
+                "(player_id, name, tour, country, hand, height_cm, "
+                "first_seen_date, last_seen_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(r.player_id),
+                 _safe_str(r.name) or "?",
+                 _safe_str(r.tour),
+                 _safe_str(r.country),
+                 _safe_str(r.hand),
+                 _safe_int(r.height_cm),
+                 _safe_str(r.first_seen_date),
+                 _safe_str(r.last_seen_date)),
+            )
+            n_players += 1
+        conn.execute("COMMIT")
+
+        # tournaments
+        conn.execute("BEGIN")
+        for r in tdf.itertuples(index=False):
+            conn.execute(
+                "INSERT OR REPLACE INTO tournaments "
+                "(tourney_id, name, tour, surface, level, draw_size, "
+                "year, start_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(r.tourney_id),
+                 _safe_str(r.tourney_name),
+                 _safe_str(r.tour),
+                 _safe_str(r.surface),
+                 _safe_str(r.tourney_level),
+                 _safe_int(r.draw_size),
+                 _safe_int(r.year),
+                 _safe_str(r.tourney_date_str)),
+            )
+            n_tourneys += 1
+        conn.execute("COMMIT")
+
+        # matches: INSERT OR IGNORE then UPDATE so we get back a stable
+        # match_id we can use for match_stats below.
+        conn.execute("BEGIN")
+        match_ids: dict[str, int] = {}
+        for r in mdf.itertuples(index=False):
+            key = (str(r.tourney_id), _safe_int(r.match_num),
+                   _safe_str(r.round),
+                   str(r.winner_id), str(r.loser_id))
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO matches "
+                "(tourney_id, match_date, round, match_num, best_of, "
+                "minutes, score, winner_id, loser_id, "
+                "winner_seed, loser_seed, winner_entry, loser_entry, "
+                "winner_age, loser_age, "
+                "winner_rank, loser_rank, "
+                "winner_rank_points, loser_rank_points) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?)",
+                (key[0], _safe_str(r.tourney_date_str), key[2], key[1],
+                 _safe_int(r.best_of), _safe_int(getattr(r, "minutes", None)),
+                 _safe_str(getattr(r, "score", None)),
+                 key[3], key[4],
+                 _safe_int(r.winner_seed), _safe_int(r.loser_seed),
+                 _safe_str(r.winner_entry), _safe_str(r.loser_entry),
+                 _safe_float(r.winner_age), _safe_float(r.loser_age),
+                 _safe_int(r.winner_rank), _safe_int(r.loser_rank),
+                 _safe_int(r.winner_rank_points),
+                 _safe_int(r.loser_rank_points)),
+            )
+            mid = conn.execute(
+                "SELECT match_id FROM matches WHERE tourney_id = ? "
+                "AND match_num IS ? AND round IS ? AND winner_id = ? "
+                "AND loser_id = ?",
+                key,
+            ).fetchone()
+            if mid:
+                match_ids[r.match_natural_key] = mid[0]
+                n_matches += 1
+        conn.execute("COMMIT")
+
+        # match_stats: 2 rows per match, one for winner one for loser
+        conn.execute("BEGIN")
+        for r in mdf.itertuples(index=False):
+            match_id = match_ids.get(r.match_natural_key)
+            if match_id is None:
+                continue
+            for is_winner, prefix, pid in (
+                (1, "w_", str(r.winner_id)),
+                (0, "l_", str(r.loser_id)),
+            ):
+                conn.execute(
+                    "INSERT OR REPLACE INTO match_stats "
+                    "(match_id, player_id, is_winner, "
+                    "aces, double_faults, serve_points, "
+                    "first_serves_in, first_serves_won, "
+                    "second_serves_won, service_games, "
+                    "break_points_saved, break_points_faced) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (match_id, pid, is_winner,
+                     _safe_int(getattr(r, f"{prefix}ace", None)),
+                     _safe_int(getattr(r, f"{prefix}df", None)),
+                     _safe_int(getattr(r, f"{prefix}svpt", None)),
+                     _safe_int(getattr(r, f"{prefix}1stIn", None)),
+                     _safe_int(getattr(r, f"{prefix}1stWon", None)),
+                     _safe_int(getattr(r, f"{prefix}2ndWon", None)),
+                     _safe_int(getattr(r, f"{prefix}SvGms", None)),
+                     _safe_int(getattr(r, f"{prefix}bpSaved", None)),
+                     _safe_int(getattr(r, f"{prefix}bpFaced", None))),
+                )
+                n_stats += 1
+        conn.execute("COMMIT")
+
+    return {"players": n_players, "tournaments": n_tourneys,
+            "matches": n_matches, "match_stats": n_stats}
+
+
 def upsert_kalshi_outcomes(
     db_path: str | Path,
     records: Iterable[dict],
@@ -519,6 +835,256 @@ def fetch_training_matches(
         cur = conn.execute(sql, params)
         cols = [c[0] for c in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def backfill_match_features(db_path: str | Path) -> int:
+    """Populate the v2 ``match_features`` table from the legacy
+    ``training_matches`` rows. Join is on (date, winner_name,
+    loser_name) -> matches.match_id. Both orientations (a = winner
+    and a = loser) get a row in match_features, matching the
+    balanced shape the trainer expects.
+
+    Returns the number of feature rows written.
+    """
+    n = 0
+    sql_select = (
+        "SELECT tm.tourney_date, tm.player_a, tm.player_b, tm.label, "
+        "tm.used_in_split, "
+        "tm.diff_elo_pre, tm.diff_surface_elo_pre, "
+        "tm.diff_form_last5, tm.diff_form_last10, "
+        "tm.diff_avg_serve_pts_won_10, tm.diff_avg_return_pts_won_10, "
+        "tm.diff_avg_bp_saved_10, tm.diff_days_rest, "
+        "tm.h2h_a_wins_minus_b_wins, tm.rank_diff, "
+        "tm.level_rank, tm.round_rank, "
+        "m.match_id, m.winner_id, m.loser_id, pw.name AS wname, "
+        "pl.name AS lname "
+        "FROM training_matches tm "
+        "JOIN matches m ON m.match_date = tm.tourney_date "
+        "JOIN players pw ON pw.player_id = m.winner_id "
+        "JOIN players pl ON pl.player_id = m.loser_id "
+        "WHERE (tm.player_a = pw.name AND tm.player_b = pl.name) "
+        "   OR (tm.player_a = pl.name AND tm.player_b = pw.name)"
+    )
+    insert_sql = (
+        "INSERT OR REPLACE INTO match_features "
+        "(match_id, orientation, player_a_id, player_b_id, label, "
+        "used_in_split, diff_elo_pre, diff_surface_elo_pre, "
+        "diff_form_last5, diff_form_last10, "
+        "diff_avg_serve_pts_won_10, diff_avg_return_pts_won_10, "
+        "diff_avg_bp_saved_10, diff_days_rest, "
+        "h2h_a_wins_minus_b_wins, rank_diff, level_rank, round_rank) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    with connect(db_path) as conn:
+        cur = conn.execute(sql_select)
+        cols = [c[0] for c in cur.description]
+        rows = cur.fetchall()
+        conn.execute("BEGIN")
+        for raw in rows:
+            r = dict(zip(cols, raw))
+            # Determine the orientation by matching player_a's name to
+            # winner / loser. Then pick player_a_id / player_b_id.
+            if r["player_a"] == r["wname"]:
+                orientation = "a_winner"
+                a_id = r["winner_id"]
+                b_id = r["loser_id"]
+            else:
+                orientation = "a_loser"
+                a_id = r["loser_id"]
+                b_id = r["winner_id"]
+            conn.execute(insert_sql, (
+                r["match_id"], orientation, a_id, b_id,
+                r["label"], r["used_in_split"],
+                r["diff_elo_pre"], r["diff_surface_elo_pre"],
+                r["diff_form_last5"], r["diff_form_last10"],
+                r["diff_avg_serve_pts_won_10"],
+                r["diff_avg_return_pts_won_10"],
+                r["diff_avg_bp_saved_10"], r["diff_days_rest"],
+                r["h2h_a_wins_minus_b_wins"], r["rank_diff"],
+                r["level_rank"], r["round_rank"],
+            ))
+            n += 1
+        conn.execute("COMMIT")
+    return n
+
+
+def backfill_kalshi_bets(db_path: str | Path) -> int:
+    """Populate the v2 ``kalshi_bets`` table from the legacy
+    ``kalshi_outcomes`` table. Attempt to link each ticker to a row
+    in ``matches`` by joining on (closed_at date, side player tricode
+    matching one of winner/loser last-name initials).
+
+    Returns the number of rows written.
+    """
+    n = 0
+    with connect(db_path) as conn:
+        outcomes = list(conn.execute(
+            "SELECT ticker, event_ticker, side_player, other_player, "
+            "market_result, settle_value, won, entry_price, "
+            "settle_price, realized_pnl, fee_cost, opened_at, "
+            "closed_at, synced_at FROM kalshi_outcomes"
+        ).fetchall())
+        ocols = ["ticker","event_ticker","side_player","other_player",
+                 "market_result","settle_value","won","entry_price",
+                 "settle_price","realized_pnl","fee_cost","opened_at",
+                 "closed_at","synced_at"]
+        # Precompute (date, frozenset[tricodes]) -> match_id for every
+        # match whose winner/loser last-name initials might match a
+        # Kalshi ticker. Cheap since matches has ~110k rows but the
+        # date join filters most away.
+        import re
+        from datetime import datetime
+        conn.execute("BEGIN")
+        for raw in outcomes:
+            ko = dict(zip(ocols, raw))
+            ev = ko.get("event_ticker") or ""
+            sp = ko.get("side_player") or ""
+            op = ko.get("other_player") or ""
+            match_id = None
+            side_player_id = None
+            if "-" in ev and len(ev.split("-", 1)[1]) >= 7:
+                date_part = ev.split("-", 1)[1][:7]
+                try:
+                    dt = datetime.strptime(date_part, "%y%b%d")
+                    date_iso = dt.strftime("%Y-%m-%d")
+                    # Look up matches on that date where last-name
+                    # initials match the (sp, op) pair.
+                    cands = conn.execute(
+                        "SELECT m.match_id, m.winner_id, m.loser_id, "
+                        "pw.name AS wname, pl.name AS lname "
+                        "FROM matches m "
+                        "JOIN players pw ON pw.player_id = m.winner_id "
+                        "JOIN players pl ON pl.player_id = m.loser_id "
+                        "WHERE m.match_date = ?",
+                        (date_iso,),
+                    ).fetchall()
+                    for cmid, wid, lid, wname, lname in cands:
+                        wtri = (wname.split()[-1][:3].upper()
+                                 if wname else "")
+                        ltri = (lname.split()[-1][:3].upper()
+                                 if lname else "")
+                        pair = frozenset({wtri, ltri})
+                        if pair == frozenset({sp, op}):
+                            match_id = cmid
+                            if sp == wtri:
+                                side_player_id = wid
+                            else:
+                                side_player_id = lid
+                            break
+                except ValueError:
+                    pass
+            conn.execute(
+                "INSERT OR REPLACE INTO kalshi_bets "
+                "(ticker, event_ticker, match_id, side_player_id, "
+                "side_tricode, other_tricode, market_result, "
+                "settle_value, won, entry_price, settle_price, "
+                "realized_pnl, fee_cost, opened_at, closed_at, "
+                "synced_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ko["ticker"], ko["event_ticker"], match_id,
+                 side_player_id, sp, op,
+                 ko["market_result"], ko["settle_value"],
+                 ko["won"], ko["entry_price"], ko["settle_price"],
+                 ko["realized_pnl"], ko["fee_cost"],
+                 ko["opened_at"], ko["closed_at"],
+                 ko["synced_at"]),
+            )
+            n += 1
+        conn.execute("COMMIT")
+    return n
+
+
+def fetch_combined_matches(
+    db_path: str | Path,
+    *,
+    offset: int = 0,
+    limit: int = 20,
+    tour: str | None = None,
+) -> list[dict]:
+    """JOIN across the v2 normalised tables and return a flat dict per
+    match with everything visible at once: tournament + both players'
+    attrs + outcome + per-player serving stats + the model's
+    engineered features + any Kalshi bet linked to it.
+
+    Newest-first by ``matches.match_date``. Pagination by absolute
+    offset / limit since the dashboard's union pagination needs that.
+    """
+    sql = """
+    SELECT
+        m.match_id, m.match_date, m.round, m.match_num, m.best_of,
+        m.minutes, m.score, m.winner_id, m.loser_id,
+        m.winner_seed, m.loser_seed, m.winner_entry, m.loser_entry,
+        m.winner_age, m.loser_age,
+        m.winner_rank, m.loser_rank,
+        m.winner_rank_points, m.loser_rank_points,
+        t.tourney_id, t.name AS tourney_name, t.tour, t.surface,
+        t.level, t.draw_size, t.year,
+        pw.name AS winner_name, pw.country AS winner_country,
+        pw.hand AS winner_hand, pw.height_cm AS winner_height_cm,
+        pl.name AS loser_name, pl.country AS loser_country,
+        pl.hand AS loser_hand, pl.height_cm AS loser_height_cm,
+        sw.aces AS w_aces, sw.double_faults AS w_df,
+        sw.serve_points AS w_svpt, sw.first_serves_in AS w_1stIn,
+        sw.first_serves_won AS w_1stWon,
+        sw.second_serves_won AS w_2ndWon,
+        sw.service_games AS w_SvGms,
+        sw.break_points_saved AS w_bpSaved,
+        sw.break_points_faced AS w_bpFaced,
+        sl.aces AS l_aces, sl.double_faults AS l_df,
+        sl.serve_points AS l_svpt, sl.first_serves_in AS l_1stIn,
+        sl.first_serves_won AS l_1stWon,
+        sl.second_serves_won AS l_2ndWon,
+        sl.service_games AS l_SvGms,
+        sl.break_points_saved AS l_bpSaved,
+        sl.break_points_faced AS l_bpFaced,
+        mf.diff_elo_pre, mf.diff_surface_elo_pre,
+        mf.diff_form_last5, mf.diff_form_last10,
+        mf.diff_avg_serve_pts_won_10, mf.diff_avg_return_pts_won_10,
+        mf.diff_avg_bp_saved_10, mf.diff_days_rest,
+        mf.h2h_a_wins_minus_b_wins, mf.rank_diff,
+        mf.level_rank, mf.round_rank,
+        kb.ticker AS bet_ticker, kb.side_tricode AS bet_side,
+        kb.entry_price AS bet_entry, kb.realized_pnl AS bet_pnl,
+        kb.won AS bet_won, kb.market_result AS bet_market_result
+    FROM matches m
+    LEFT JOIN tournaments t ON t.tourney_id = m.tourney_id
+    LEFT JOIN players pw   ON pw.player_id = m.winner_id
+    LEFT JOIN players pl   ON pl.player_id = m.loser_id
+    LEFT JOIN match_stats sw
+        ON sw.match_id = m.match_id AND sw.player_id = m.winner_id
+    LEFT JOIN match_stats sl
+        ON sl.match_id = m.match_id AND sl.player_id = m.loser_id
+    LEFT JOIN match_features mf
+        ON mf.match_id = m.match_id AND mf.orientation = 'a_winner'
+    LEFT JOIN kalshi_bets kb
+        ON kb.match_id = m.match_id
+    """
+    params: list[Any] = []
+    where: list[str] = []
+    if tour:
+        where.append("t.tour = ?")
+        params.append(tour)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += (" ORDER BY m.match_date DESC, m.match_id DESC "
+            "LIMIT ? OFFSET ?")
+    params.extend([limit, offset])
+    with connect(db_path) as conn:
+        cur = conn.execute(sql, params)
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def count_combined_matches(db_path: str | Path,
+                              tour: str | None = None) -> int:
+    sql = "SELECT COUNT(*) FROM matches m"
+    params: list[Any] = []
+    if tour:
+        sql += (" LEFT JOIN tournaments t ON t.tourney_id = m.tourney_id"
+                " WHERE t.tour = ?")
+        params.append(tour)
+    with connect(db_path) as conn:
+        return int(conn.execute(sql, params).fetchone()[0])
 
 
 def _safe_str(v: Any) -> str | None:
