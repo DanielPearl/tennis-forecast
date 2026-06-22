@@ -486,11 +486,25 @@ def fetch_training_matches(
     *,
     page: int = 1,
     page_size: int = 50,
+    offset: int | None = None,
+    limit: int | None = None,
     tour: str | None = None,
     split: str | None = None,
 ) -> list[dict]:
-    """Pull a page of training rows in newest-date-first order."""
-    offset = max(0, (page - 1) * page_size)
+    """Pull a slice of training rows in newest-date-first order.
+
+    Callers that paginate uniformly pass ``page`` + ``page_size``.
+    Callers that need an arbitrary offset (e.g. a combined union with
+    a Kalshi-only prefix where the historical slice may start at a
+    non-multiple-of-page-size offset) pass ``offset`` + ``limit``
+    directly — those take precedence when set.
+    """
+    if offset is not None or limit is not None:
+        used_offset = max(0, offset or 0)
+        used_limit = max(0, limit if limit is not None else page_size)
+    else:
+        used_offset = max(0, (page - 1) * page_size)
+        used_limit = page_size
     sql = "SELECT * FROM training_matches WHERE 1=1"
     params: list[Any] = []
     if tour:
@@ -500,7 +514,7 @@ def fetch_training_matches(
         sql += " AND used_in_split = ?"
         params.append(split)
     sql += " ORDER BY tourney_date DESC, id DESC LIMIT ? OFFSET ?"
-    params.extend([page_size, offset])
+    params.extend([used_limit, used_offset])
     with connect(db_path) as conn:
         cur = conn.execute(sql, params)
         cols = [c[0] for c in cur.description]
