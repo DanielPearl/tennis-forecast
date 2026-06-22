@@ -43,10 +43,31 @@ CREATE TABLE IF NOT EXISTS training_matches (
     surface                     TEXT,
     level                       TEXT,
     round                       TEXT,
+    draw_size                   INTEGER,
+    best_of                     INTEGER,
     player_a                    TEXT    NOT NULL,
     player_b                    TEXT    NOT NULL,
     label                       INTEGER NOT NULL,
     used_in_split               TEXT,
+    -- Player A raw attributes (snapshot at match time)
+    a_age                       REAL,
+    a_height_cm                 REAL,
+    a_hand                      TEXT,
+    a_country                   TEXT,
+    a_rank                      INTEGER,
+    a_rank_points               INTEGER,
+    a_seed                      INTEGER,
+    a_entry                     TEXT,
+    -- Player B raw attributes
+    b_age                       REAL,
+    b_height_cm                 REAL,
+    b_hand                      TEXT,
+    b_country                   TEXT,
+    b_rank                      INTEGER,
+    b_rank_points               INTEGER,
+    b_seed                      INTEGER,
+    b_entry                     TEXT,
+    -- Engineered features (the 12 PREMATCH_FEATURES the model uses)
     diff_elo_pre                REAL,
     diff_surface_elo_pre        REAL,
     diff_form_last5             REAL,
@@ -59,6 +80,15 @@ CREATE TABLE IF NOT EXISTS training_matches (
     rank_diff                   REAL,
     level_rank                  REAL,
     round_rank                  REAL,
+    -- Extra candidate features (computed but currently NOT in the
+    -- model's selected list — included so the dashboard can show
+    -- "every feature considered before pruning")
+    age_diff                    REAL,
+    height_diff_cm              REAL,
+    rank_points_diff            INTEGER,
+    seed_diff                   INTEGER,
+    hand_match                  INTEGER,  -- 1 same, 0 diff, NULL unknown
+    same_country                INTEGER,
     trained_at                  TEXT    NOT NULL,
     UNIQUE (tourney_date, player_a, player_b, round)
 );
@@ -69,6 +99,10 @@ CREATE INDEX IF NOT EXISTS idx_training_matches_tour
     ON training_matches (tour);
 CREATE INDEX IF NOT EXISTS idx_training_matches_split
     ON training_matches (used_in_split);
+
+-- Self-evolving schema: add columns if an older DB lives on disk.
+-- Avoids requiring an explicit migration step.
+
 
 CREATE TABLE IF NOT EXISTS kalshi_outcomes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +137,54 @@ _FEATURE_COLS = (
     "level_rank", "round_rank",
 )
 
+# Raw + derived columns the dashboard surfaces in addition to the
+# 12 modeled features. These are stored regardless of whether the
+# trainer ends up selecting them — the user wants the page to show
+# every feature considered before pruning.
+_EXTRA_COLS = (
+    "draw_size", "best_of",
+    "a_age", "a_height_cm", "a_hand", "a_country",
+    "a_rank", "a_rank_points", "a_seed", "a_entry",
+    "b_age", "b_height_cm", "b_hand", "b_country",
+    "b_rank", "b_rank_points", "b_seed", "b_entry",
+    "age_diff", "height_diff_cm",
+    "rank_points_diff", "seed_diff",
+    "hand_match", "same_country",
+)
+
+
+# Columns introduced after the first cut of the schema. Each entry is
+# (column-name, sqlite-type) and gets ALTER TABLE-added on connect if
+# missing — keeps existing DBs forward-compatible without a separate
+# migration script.
+_NEW_COLUMNS_TRAINING: tuple[tuple[str, str], ...] = (
+    ("draw_size", "INTEGER"), ("best_of", "INTEGER"),
+    ("a_age", "REAL"), ("a_height_cm", "REAL"),
+    ("a_hand", "TEXT"), ("a_country", "TEXT"),
+    ("a_rank", "INTEGER"), ("a_rank_points", "INTEGER"),
+    ("a_seed", "INTEGER"), ("a_entry", "TEXT"),
+    ("b_age", "REAL"), ("b_height_cm", "REAL"),
+    ("b_hand", "TEXT"), ("b_country", "TEXT"),
+    ("b_rank", "INTEGER"), ("b_rank_points", "INTEGER"),
+    ("b_seed", "INTEGER"), ("b_entry", "TEXT"),
+    ("age_diff", "REAL"), ("height_diff_cm", "REAL"),
+    ("rank_points_diff", "INTEGER"), ("seed_diff", "INTEGER"),
+    ("hand_match", "INTEGER"), ("same_country", "INTEGER"),
+)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add any column from ``_NEW_COLUMNS_TRAINING`` that's missing from
+    the live ``training_matches`` table. Idempotent — ``PRAGMA
+    table_info`` is checked first so re-running is a no-op."""
+    existing = {r[1] for r in conn.execute(
+        "PRAGMA table_info(training_matches)").fetchall()}
+    for name, sql_type in _NEW_COLUMNS_TRAINING:
+        if name not in existing:
+            conn.execute(
+                f"ALTER TABLE training_matches ADD COLUMN {name} {sql_type}"
+            )
+
 
 @contextmanager
 def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
@@ -118,6 +200,7 @@ def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     try:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(_SCHEMA)
+        _ensure_columns(conn)
         yield conn
     finally:
         conn.close()
@@ -196,6 +279,135 @@ def upsert_training_panel(
         conn.executemany(sql, rows)
         conn.execute("COMMIT")
     return len(rows)
+
+
+def backfill_extra_attrs(
+    db_path: str | Path,
+    matches_csv_path: str | Path,
+) -> int:
+    """Backfill the raw player attributes + derived diffs by joining
+    ``training_matches`` against ``matches_clean.csv`` on
+    (tourney_date, winner_name, loser_name). The CSV is the only
+    source for height/hand/country/rank etc.; the trainer doesn't
+    carry those through ``build_player_a_panel``.
+
+    Idempotent. Called by both the trainer (after each fit) and the
+    manual backfill script.
+    """
+    src = pd.read_csv(matches_csv_path, usecols=[
+        "tourney_date", "winner_name", "loser_name",
+        "draw_size", "best_of",
+        "winner_age", "winner_ht", "winner_hand", "winner_ioc",
+        "winner_rank", "winner_rank_points",
+        "winner_seed", "winner_entry",
+        "loser_age", "loser_ht", "loser_hand", "loser_ioc",
+        "loser_rank", "loser_rank_points",
+        "loser_seed", "loser_entry",
+    ])
+    src["tourney_date"] = pd.to_datetime(
+        src["tourney_date"], errors="coerce",
+    ).dt.strftime("%Y-%m-%d")
+    # Lookup keyed on the orientation we'll see in training_matches:
+    # both (date, winner, loser) and (date, loser, winner) point at
+    # the same source row, with a flag that says which side is A.
+    by_key: dict[tuple[str, str, str], tuple[pd.Series, bool]] = {}
+    for r in src.itertuples():
+        date = r.tourney_date
+        if not date or pd.isna(date):
+            continue
+        w_name = r.winner_name
+        l_name = r.loser_name
+        by_key[(date, w_name, l_name)] = (r, True)   # A = winner
+        by_key[(date, l_name, w_name)] = (r, False)  # A = loser
+
+    update_sql = (
+        "UPDATE training_matches SET "
+        + ", ".join(f"{c} = ?" for c in _EXTRA_COLS)
+        + " WHERE id = ?"
+    )
+
+    updated = 0
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, tourney_date, player_a, player_b "
+            "FROM training_matches"
+        ).fetchall()
+        batch: list[tuple] = []
+        for rid, date, pa, pb in rows:
+            hit = by_key.get((date, pa, pb))
+            if not hit:
+                continue
+            r, a_is_winner = hit
+            if a_is_winner:
+                a_age, a_ht, a_hand, a_ioc = (r.winner_age, r.winner_ht,
+                                                 r.winner_hand, r.winner_ioc)
+                a_rank, a_rp = r.winner_rank, r.winner_rank_points
+                a_seed, a_entry = r.winner_seed, r.winner_entry
+                b_age, b_ht, b_hand, b_ioc = (r.loser_age, r.loser_ht,
+                                                 r.loser_hand, r.loser_ioc)
+                b_rank, b_rp = r.loser_rank, r.loser_rank_points
+                b_seed, b_entry = r.loser_seed, r.loser_entry
+            else:
+                a_age, a_ht, a_hand, a_ioc = (r.loser_age, r.loser_ht,
+                                                 r.loser_hand, r.loser_ioc)
+                a_rank, a_rp = r.loser_rank, r.loser_rank_points
+                a_seed, a_entry = r.loser_seed, r.loser_entry
+                b_age, b_ht, b_hand, b_ioc = (r.winner_age, r.winner_ht,
+                                                 r.winner_hand, r.winner_ioc)
+                b_rank, b_rp = r.winner_rank, r.winner_rank_points
+                b_seed, b_entry = r.winner_seed, r.winner_entry
+
+            age_diff = _diff(a_age, b_age)
+            height_diff = _diff(a_ht, b_ht)
+            rp_diff = _diff(a_rp, b_rp)
+            seed_diff = _diff(a_seed, b_seed)
+            hand_match = _hand_match(a_hand, b_hand)
+            same_country = (1 if (a_ioc and b_ioc and a_ioc == b_ioc)
+                              else 0)
+
+            batch.append((
+                _safe_int(r.draw_size), _safe_int(r.best_of),
+                _safe_float(a_age), _safe_float(a_ht),
+                _safe_str(a_hand), _safe_str(a_ioc),
+                _safe_int(a_rank), _safe_int(a_rp),
+                _safe_int(a_seed), _safe_str(a_entry),
+                _safe_float(b_age), _safe_float(b_ht),
+                _safe_str(b_hand), _safe_str(b_ioc),
+                _safe_int(b_rank), _safe_int(b_rp),
+                _safe_int(b_seed), _safe_str(b_entry),
+                age_diff, height_diff, rp_diff, seed_diff,
+                hand_match, same_country,
+                rid,
+            ))
+            if len(batch) >= 5000:
+                conn.execute("BEGIN")
+                conn.executemany(update_sql, batch)
+                conn.execute("COMMIT")
+                updated += len(batch)
+                batch = []
+        if batch:
+            conn.execute("BEGIN")
+            conn.executemany(update_sql, batch)
+            conn.execute("COMMIT")
+            updated += len(batch)
+    return updated
+
+
+def _diff(a, b) -> Optional[float]:
+    if a is None or b is None or pd.isna(a) or pd.isna(b):
+        return None
+    try:
+        return float(a) - float(b)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hand_match(a, b) -> Optional[int]:
+    if a is None or b is None or pd.isna(a) or pd.isna(b):
+        return None
+    if not str(a).strip() or not str(b).strip():
+        return None
+    return 1 if str(a) == str(b) else 0
 
 
 def upsert_kalshi_outcomes(

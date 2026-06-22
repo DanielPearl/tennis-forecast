@@ -394,7 +394,8 @@ def train_and_persist() -> dict[str, Any]:
     # at index ``val_cut`` within ``train_full`` (chronological), so
     # the val cutoff is the FIRST date in ``val_part``.
     try:
-        from ..data.training_db import upsert_training_panel
+        from ..data.training_db import (upsert_training_panel,
+                                          backfill_extra_attrs)
         db_path = artifacts_dir.parent.parent / "training_history.db"
         val_cutoff = (val_part["tourney_date"].min()
                       if len(val_part) else cutoff)
@@ -405,10 +406,20 @@ def train_and_persist() -> dict[str, Any]:
         )
         log.info("wrote training panel to db → %s (%d rows)",
                   db_path, n_db)
+        # Pre-prune candidate features (age, height, hand, country,
+        # rank, rank_points, seed, entry, plus derived diffs) come
+        # from matches_clean.csv since build_player_a_panel doesn't
+        # carry the raw attribute columns through. Run the backfill
+        # so the dashboard's Training Data page can render every
+        # candidate column, not just the 12 selected ones.
+        matches_csv = (artifacts_dir.parent / "matches_clean.csv")
+        if matches_csv.exists():
+            n_back = backfill_extra_attrs(db_path, matches_csv)
+            log.info("backfilled extra player attributes (%d rows)",
+                      n_back)
     except Exception:  # noqa: BLE001
-        log.exception("training_db.upsert_training_panel failed "
-                       "(non-fatal — joblib bundle is the source of "
-                       "truth for inference)")
+        log.exception("training_db updates failed (non-fatal — joblib "
+                       "bundle is the source of truth for inference)")
 
     # Dump logistic regression coefficients next to metrics so the
     # downstream dashboard can show "model coefficients" on its card.
