@@ -385,6 +385,31 @@ def train_and_persist() -> dict[str, Any]:
     log.info("wrote rolling form state → %s (%d players)",
              rolling_path, len(rolling_snapshot))
 
+    # Persist the full panel (with engineered features + label) to the
+    # training_history.db SQLite store so the dashboard's Training Data
+    # page can render the exact rows the model trained on. Idempotent
+    # — uniqueness on (tourney_date, player_a, player_b, round) means
+    # rerunning the trainer overwrites prior records rather than
+    # duplicating. Val cutoff: the trainer split was train_part / val
+    # at index ``val_cut`` within ``train_full`` (chronological), so
+    # the val cutoff is the FIRST date in ``val_part``.
+    try:
+        from ..data.training_db import upsert_training_panel
+        db_path = artifacts_dir.parent.parent / "training_history.db"
+        val_cutoff = (val_part["tourney_date"].min()
+                      if len(val_part) else cutoff)
+        n_db = upsert_training_panel(
+            db_path, oriented,
+            split_cutoff_train=val_cutoff,
+            split_cutoff_val=cutoff,
+        )
+        log.info("wrote training panel to db → %s (%d rows)",
+                  db_path, n_db)
+    except Exception:  # noqa: BLE001
+        log.exception("training_db.upsert_training_panel failed "
+                       "(non-fatal — joblib bundle is the source of "
+                       "truth for inference)")
+
     # Dump logistic regression coefficients next to metrics so the
     # downstream dashboard can show "model coefficients" on its card.
     # The coefficients here are interpretable per-feature weights from
