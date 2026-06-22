@@ -232,7 +232,8 @@ def build_player_a_panel(panel: pd.DataFrame) -> pd.DataFrame:
     Carrying the full Sackmann panel here would double-store ~50
     irrelevant string columns and OOM the small droplet.
     """
-    keep = ["tourney_date", "tourney_name", "surface", "tourney_level", "round"]
+    keep = ["tourney_date", "tourney_name", "surface", "tourney_level",
+            "round", "tour"]
     base = panel[keep].copy()
 
     a_pos = base.copy()
