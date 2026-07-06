@@ -346,6 +346,8 @@ def train_and_persist() -> dict[str, Any]:
         "ensemble": _eval(y_test, ens_p_test),
         "blended": _eval(y_test, blend_p),
         "ensemble_weights": weights,
+        "blend_weight_ensemble": blend_w_ens,
+        "blend_weight_logistic": blend_w_log,
         "xgboost": "xgb" in fitted,
     }
     log.info("metrics: %s", json.dumps(metrics, indent=2))
