@@ -1,14 +1,21 @@
 """Pull tour-level singles match logs.
 
-The Sackmann GitHub mirrors (``tennis_atp`` / ``tennis_wta``) are the
-free baseline for tennis match data — surface tagged, round tagged,
-serve/return aggregates per match, back to the open era. We pull a
-configurable rolling window. Files are cached under ``data/raw/`` so
-re-train is a no-op for years that haven't changed.
+The historical baseline was Jeff Sackmann's ``tennis_atp`` / ``tennis_wta``
+GitHub repos (surface + round tagged, serve/return aggregates per match,
+back to the open era). Those repos were taken down in mid-2026; we now
+walk an ordered chain of community mirrors that copy the same Sackmann
+schema (identical column names + tour-year filename convention).
+
+Order matters — the first mirror that returns 200 for a given (tour,
+year) wins and is cached to disk. Adding a new mirror doesn't
+invalidate the on-disk cache because we key by (tour, year), not by
+mirror. ATP is well-covered by mirrors; WTA has no per-year mirror we
+trust yet, so pre-cached WTA files continue to be used and missing
+years silently drop out.
 
 Why we don't scrape live ATP/WTA pages: the official sites rate-limit
-aggressively and the markup turns over every season. The Sackmann CSVs
-are the same data, kept current, mirrored to git.
+aggressively and the markup turns over every season. Sackmann's CSVs
+(and the mirrors that copy them) share a stable schema.
 """
 from __future__ import annotations
 
@@ -31,9 +38,28 @@ _FILE_TEMPLATE = {
 }
 
 
-def _file_url(tour: str, year: int, base_atp: str, base_wta: str) -> str:
-    base = base_atp if tour == "atp" else base_wta
-    return f"{base}/{_FILE_TEMPLATE[tour].format(year=year)}"
+def _mirror_urls(tour: str, year: int, base_atp: str, base_wta: str
+                  ) -> list[str]:
+    """Return the ordered list of URLs to try for one (tour, year).
+
+    ``base_atp`` / ``base_wta`` from config stay first so that if the
+    upstream ever comes back it wins automatically. The subsequent
+    fallbacks are community mirrors that copy the Sackmann schema
+    verbatim; each covers a different year range (see docstring).
+    """
+    fname = _FILE_TEMPLATE[tour].format(year=year)
+    if tour == "atp":
+        # Coverage: config-configured base (usually Sackmann master) →
+        # stakah/tennis_atp (1968-2019) → jegqwll/tennis_atp_2000_2025
+        # (2000-2025). The chain covers every year 1968-2025 with at
+        # least one mirror, and years present in multiple mirrors take
+        # whichever wins first (config first for freshness).
+        return [
+            f"{base_atp}/{fname}",
+            f"https://raw.githubusercontent.com/stakah/tennis_atp/master/{fname}",
+            f"https://raw.githubusercontent.com/jegqwll/tennis_atp_2000_2025/main/{fname}",
+        ]
+    return [f"{base_wta}/{fname}"]
 
 
 def _local_path(raw_dir: Path, tour: str, year: int) -> Path:
@@ -43,26 +69,34 @@ def _local_path(raw_dir: Path, tour: str, year: int) -> Path:
 def fetch_year(tour: str, year: int, raw_dir: Path,
                base_atp: str, base_wta: str,
                force: bool = False) -> pd.DataFrame | None:
-    """Fetch one (tour, year) CSV. Returns None when the year isn't
-    published yet (mid-season for the current year is fine; future
-    years 404)."""
+    """Fetch one (tour, year) CSV. Returns None when no mirror publishes
+    the year (mid-season for the current year is fine; future years 404
+    across every mirror)."""
     out = _local_path(raw_dir, tour, year)
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists() and not force:
         return pd.read_csv(out, low_memory=False)
-    url = _file_url(tour, year, base_atp, base_wta)
-    try:
-        r = requests.get(url, timeout=30)
-    except requests.RequestException as exc:
-        log.warning("fetch_year %s %s failed: %s", tour, year, exc)
-        return None
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-    df = pd.read_csv(io.StringIO(r.text), low_memory=False)
-    df.to_csv(out, index=False)
-    log.info("fetched %s %d (%d rows)", tour, year, len(df))
-    return df
+    for url in _mirror_urls(tour, year, base_atp, base_wta):
+        try:
+            r = requests.get(url, timeout=30)
+        except requests.RequestException as exc:
+            log.warning("fetch_year %s %s from %s failed: %s",
+                         tour, year, url, exc)
+            continue
+        if r.status_code == 404:
+            continue
+        try:
+            r.raise_for_status()
+        except requests.HTTPError as exc:
+            log.warning("fetch_year %s %s from %s failed: %s",
+                         tour, year, url, exc)
+            continue
+        df = pd.read_csv(io.StringIO(r.text), low_memory=False)
+        df.to_csv(out, index=False)
+        log.info("fetched %s %d (%d rows, %s)",
+                  tour, year, len(df), url.rsplit("/", 3)[-3])
+        return df
+    return None
 
 
 def fetch_all(force_current_year: bool = True) -> pd.DataFrame:
