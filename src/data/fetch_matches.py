@@ -44,8 +44,15 @@ def _mirror_urls(tour: str, year: int, base_atp: str, base_wta: str
 
     ``base_atp`` / ``base_wta`` from config stay first so that if the
     upstream ever comes back it wins automatically. The subsequent
-    fallbacks are community mirrors that copy the Sackmann schema
-    verbatim; each covers a different year range (see docstring).
+    fallbacks are community mirrors that copy the Sackmann schema —
+    each covers a different year range (see docstring). ATP mirrors
+    carry the full 49-column serve/return panel; the WTA mirror
+    (LuckyLoser91/TennisCourtLog) carries the stripped 13-column
+    schema (no serve stats, but tourney_date / surface / level /
+    round / rank / rank_points / best_of are all present), which is
+    enough for the Elo bootstrap and the rank/surface features. The
+    matches_clean concat handles the missing columns as NaN and the
+    HistGradientBoosting trainer is NaN-native.
     """
     fname = _FILE_TEMPLATE[tour].format(year=year)
     if tour == "atp":
@@ -59,7 +66,17 @@ def _mirror_urls(tour: str, year: int, base_atp: str, base_wta: str
             f"https://raw.githubusercontent.com/stakah/tennis_atp/master/{fname}",
             f"https://raw.githubusercontent.com/jegqwll/tennis_atp_2000_2025/main/{fname}",
         ]
-    return [f"{base_wta}/{fname}"]
+    # WTA: config base first (upstream if it comes back), then the
+    # LuckyLoser91 mirror which covers 1968-2026 with the stripped
+    # 13-column schema. The 2015+ years we've already cached to disk
+    # use the full 49-column schema (from the pre-takedown Sackmann
+    # snapshot) — the on-disk cache is what fetch_year returns for
+    # those years, so the schema downgrade only affects years we
+    # newly pull from the mirror.
+    return [
+        f"{base_wta}/{fname}",
+        f"https://raw.githubusercontent.com/LuckyLoser91/TennisCourtLog/main/tennis_wta/{fname}",
+    ]
 
 
 def _local_path(raw_dir: Path, tour: str, year: int) -> Path:
@@ -132,9 +149,23 @@ def fetch_all(force_current_year: bool = True) -> pd.DataFrame:
             "config.data.history_start_year"
         )
     matches = pd.concat(frames, ignore_index=True)
-    matches["tourney_date"] = pd.to_datetime(
+    # tourney_date arrives in two formats depending on the mirror:
+    # Sackmann-schema ATP files (and cached WTA 2015+) use %Y%m%d
+    # (``20240521``); the LuckyLoser91 WTA mirror ships ISO strings
+    # (``2000-04-30``). Try %Y%m%d first (majority of rows), then
+    # fall back to a permissive parser for whatever %Y%m%d couldn't
+    # coerce. Doing it this way is much faster than a single flexible
+    # pd.to_datetime call across ~200k rows.
+    dt = pd.to_datetime(
         matches["tourney_date"].astype(str), format="%Y%m%d", errors="coerce"
     )
+    unresolved = dt.isna()
+    if unresolved.any():
+        dt.loc[unresolved] = pd.to_datetime(
+            matches.loc[unresolved, "tourney_date"].astype(str),
+            errors="coerce",
+        )
+    matches["tourney_date"] = dt
     matches = matches.dropna(subset=["tourney_date", "winner_name", "loser_name"])
     matches = matches.sort_values("tourney_date").reset_index(drop=True)
     return matches

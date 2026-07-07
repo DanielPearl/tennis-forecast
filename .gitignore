@@ -44,3 +44,4 @@ artifacts/
 
 # --- notebooks ---
 .ipynb_checkpoints/
+training_history.db*
