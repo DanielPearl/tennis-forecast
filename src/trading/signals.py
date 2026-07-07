@@ -9,8 +9,13 @@ Labels (in priority order — the first match wins):
 
   INJURY_RISK         injury_news_flag is True
   AVOID_VOLATILE      volatility_score above the configured cap
-  MARKET_OVERREACTION market_overreaction flag set by the live model
   STRONG_EDGE         |edge| >= strong_edge_min
+                      (with an ``overreaction`` note in the reason
+                       string when the live model flagged one — this
+                       used to be a distinct MARKET_OVERREACTION
+                       label but the 2026-07-07 audit showed it
+                       tracked STRONG_EDGE's ROI exactly, so we fold
+                       it in rather than pretend it's discriminating)
   SMALL_EDGE          |edge| >= small_edge_min
   WATCH               match is interesting (Elo within 100, named tournament)
                       but no actionable edge
@@ -35,7 +40,7 @@ class SignalResult:
 
 
 _PRIORITY = [
-    "INJURY_RISK", "AVOID_VOLATILE", "MARKET_OVERREACTION",
+    "INJURY_RISK", "AVOID_VOLATILE",
     "STRONG_EDGE", "SMALL_EDGE", "WATCH", "NO_TRADE",
 ]
 
@@ -81,20 +86,13 @@ def label_match(model_prob_a: float, market_prob_a: float | None,
             confidence_score=_confidence(model_prob_a, volatility) * 0.5,
         )
 
-    # 2) Market overreaction — note this BEFORE the volatility cap because
-    #    overreaction is itself a tradeable thesis (fade the move). But
-    #    only when edge is on the right side of the move and the price
-    #    is in a sane band.
-    if market_overreaction and side_market is not None and edge_abs >= t["small_edge_min"]:
-        if t["min_market_prob"] <= side_market <= t["max_market_prob"]:
-            reason = "; ".join(rules_fired) or "market move outpaces model adjustment"
-            return SignalResult(
-                label="MARKET_OVERREACTION",
-                reason=reason,
-                confidence_score=_confidence(model_prob_a, volatility),
-            )
+    # (MARKET_OVERREACTION was previously a distinct label here; the
+    # 2026-07-07 audit showed it produced identical ROI to STRONG_EDGE
+    # over 102 trades, so it's been folded into the edge labels. The
+    # overreaction flag is preserved on the row and appended to the
+    # reason string when it fires.)
 
-    # 3) Volatility cap.
+    # 2) Volatility cap.
     if volatility >= t["max_tradable_volatility"]:
         return SignalResult(
             label="AVOID_VOLATILE",
@@ -117,16 +115,23 @@ def label_match(model_prob_a: float, market_prob_a: float | None,
             confidence_score=_confidence(model_prob_a, volatility),
         )
 
+    overreact_note = ""
+    if market_overreaction:
+        overreact_note = " (overreaction: "
+        overreact_note += "; ".join(rules_fired) if rules_fired else "market move outpaces model adjustment"
+        overreact_note += ")"
     if edge_abs >= t["strong_edge_min"]:
         return SignalResult(
             label="STRONG_EDGE",
-            reason=f"model {edge_signed*100:+.1f}pp vs market on {side}",
+            reason=f"model {edge_signed*100:+.1f}pp vs market on {side}"
+                    + overreact_note,
             confidence_score=_confidence(model_prob_a, volatility),
         )
     if edge_abs >= t["small_edge_min"]:
         return SignalResult(
             label="SMALL_EDGE",
-            reason=f"model {edge_signed*100:+.1f}pp vs market on {side}",
+            reason=f"model {edge_signed*100:+.1f}pp vs market on {side}"
+                    + overreact_note,
             confidence_score=_confidence(model_prob_a, volatility),
         )
 

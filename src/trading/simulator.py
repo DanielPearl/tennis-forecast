@@ -47,7 +47,7 @@ log = setup_logging("trading.simulator")
 
 
 # Signal labels that trigger an open. Everything else is monitor-only.
-_TRADEABLE_LABELS = {"STRONG_EDGE", "SMALL_EDGE", "MARKET_OVERREACTION"}
+_TRADEABLE_LABELS = {"STRONG_EDGE", "SMALL_EDGE"}
 # After a settle, brief cooldown before re-opening on the same match_id.
 # Recycled matches get fresh ids (see ``match_progression._replace_completed``)
 # so this only blocks pathological flapping inside a single tick window —
@@ -230,6 +230,15 @@ def _settle_position(p: dict[str, Any], live_record: dict[str, Any],
         "settle_market_prob": float(live_record.get("market_prob_a") if p["side"] == "PLAYER_A"
                                      else 1.0 - (live_record.get("market_prob_a") or 0.5)),
         "realized_pnl": round(realized, 4),
+        # Tag the exit so we can grade this row later. Before this the
+        # close path silently left ``exit_reason`` unset, so 27% of the
+        # closed_positions in the 695-trade paper history came back as
+        # ``exit_reason: None`` in the audit — indistinguishable from
+        # a bookkeeping gap. These are actually the RICHEST rows for
+        # calibration since they carry a real match outcome (not a
+        # hedge-daemon decision).
+        "exit_reason": "settled_match",
+        "result": "SETTLED",
     }
 
 
@@ -342,6 +351,11 @@ def _settle_orphans_from_kalshi(state: dict[str, Any],
         }
         closed = _settle_position(p, synthetic_live, slippage)
         closed["close_reason"] = "auto-settle from Kalshi (match dropped from live state)"
+        # Overwrite the default settled_match tag: the orphan sweep
+        # rebuilds the winner_side from Kalshi's final quotes rather
+        # than from an in-memory live record, so it's worth
+        # distinguishing on the analytics side.
+        closed["exit_reason"] = "settled_orphan"
         closed["result"] = "SETTLED"
         closed_records.append(closed)
         state.setdefault("last_settled_at_by_match_id",
@@ -377,6 +391,13 @@ def _close_at_market(p: dict[str, Any], slippage: float,
         "settle_market_prob": round(current, 4),
         "realized_pnl": round(realized, 4),
         "close_reason": reason,
+        # Simulator-side profit_lock closes almost never fire in prod
+        # because the hedge_monitor daemon in the trading dashboard
+        # intercepts positions first (and tags them hedge_pl / hedge_sl).
+        # Tag the ones that do so we can distinguish sim-side profit
+        # locks from hedge-daemon locks after the fact.
+        "exit_reason": ("profit_lock" if current >= entry
+                          else "stop_loss"),
     }
 
 

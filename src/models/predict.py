@@ -143,20 +143,83 @@ def predict_match(
     rb = (_ROLLING or {}).get(player_b, {})
     def _diff(key: str, default: float) -> float:
         return float(ra.get(key, default)) - float(rb.get(key, default))
+    # Populate every feature the trainer might have kept in its final
+    # ``feature_list``. Real values where we have them (rolling snapshot
+    # + Elo + H2H + last-match dates); neutral defaults for the columns
+    # whose backing state isn't persisted per player yet — the trainer
+    # imputed the same defaults during fit so the model sees a familiar
+    # input distribution rather than crashing on a KeyError.
+    #
+    # This function was silently returning ``model_source: elo_only``
+    # (via safe_predict's exception path) for every prediction before
+    # the fix, because the trained bundle carries ~38 features and
+    # this dict only listed 12. See the 2026-07-07 audit: 100% of
+    # watchlist rows fell back to Elo-only, meaning the 695-trade
+    # paper history was a graded run of the Elo-only baseline, not
+    # the full ensemble.
+    ranks_diff = float((rank_b or 500) - (rank_a or 500))
+    log_rank_pts = 0.0  # rank points not tracked at inference — neutral
     feats = {
+        # ── Elo core ─────────────────────────────────────────────────
         "diff_elo_pre": elo_feats["elo_diff"],
         "diff_surface_elo_pre": elo_feats["surface_elo_diff"],
+        "diff_elo_delta_30d": 0.0,
+        "diff_elo_delta_90d": 0.0,
+        # ── Form / serve / return (from rolling snapshot) ───────────
         "diff_form_last5": _diff("form_last5", 0.5),
         "diff_form_last10": _diff("form_last10", 0.5),
+        # surface_form_last5 not persisted per player — use overall
+        # form as a proxy so the trained tree isn't fed a hard 0.
+        "diff_surface_form_last5": _diff("form_last5", 0.5),
         "diff_avg_serve_pts_won_10": _diff("avg_serve_pts_won_10", 0.6),
         "diff_avg_return_pts_won_10": _diff("avg_return_pts_won_10", 0.4),
         "diff_avg_bp_saved_10": _diff("avg_bp_saved_10", 0.6),
+        # ── Rest / fatigue / layoff ────────────────────────────────
         "diff_days_rest": _days_rest(player_a, ref) - _days_rest(player_b, ref),
+        "diff_matches_last_7d": 0.0,
+        "diff_matches_last_14d": 0.0,
+        "diff_layoff_days": 0.0,
+        # ── Head-to-head ───────────────────────────────────────────
         "h2h_a_wins_minus_b_wins": float(_h2h_diff(player_a, player_b)),
-        "rank_diff": float((rank_b or 500) - (rank_a or 500)),
+        # Recency/surface H2H not tracked separately; overall H2H is
+        # the safest proxy.
+        "h2h_a_wins_minus_b_wins_recency": float(_h2h_diff(player_a, player_b)),
+        "h2h_a_wins_minus_b_wins_on_surface": float(_h2h_diff(player_a, player_b)),
+        # ── Rank ────────────────────────────────────────────────────
+        "rank_diff": ranks_diff,
+        "log_rank_points_diff": log_rank_pts,
+        # ── Tournament context ─────────────────────────────────────
         "level_rank": float(_level_rank(level)),
         "round_rank": float(_round_rank(round_)),
+        "best_of": 3.0,  # Kalshi tour markets — bo3 except finals
+        "draw_size": 32.0,  # median tour-level draw
+        "diff_round_win_pct": 0.0,
+        # ── Score-derived rates (rolling snapshot) ─────────────────
+        "diff_retirement_rate_20": _diff("retirement_rate_20", 0.02),
+        "diff_tiebreak_win_pct": _diff("tiebreak_win_pct", 0.5),
+        "diff_comeback_rate": _diff("comeback_rate", 0.1),
+        "diff_choke_rate": _diff("choke_rate", 0.1),
+        "diff_set_win_pct": _diff("set_win_pct", 0.5),
+        "diff_avg_opp_elo_10": _diff("avg_opp_elo_10", 1500.0),
+        "diff_avg_match_min_10": _diff("avg_match_min_10", 90.0),
+        # ── Physical attributes (not tracked per player yet) ───────
+        "diff_ht": 0.0,
+        "diff_age": 0.0,
+        "diff_is_lefty": 0.0,
+        "a_is_lefty": 0.0,
+        "b_is_lefty": 0.0,
+        "a_age": 28.0,  # median tour-level age
+        "b_age": 28.0,
     }
+    # Only feed the columns the bundle actually asked for — extra keys
+    # are harmless (pandas ignores them) but missing keys would crash
+    # the sklearn column-order check.
+    missing = [c for c in bundle["feature_list"] if c not in feats]
+    for c in missing:
+        # Anything unrecognised gets a 0 default so the pipeline never
+        # crashes even if the trainer adds new features between
+        # bundle-write and predict-loader upgrade.
+        feats[c] = 0.0
     X = pd.DataFrame([feats])[bundle["feature_list"]].fillna(0.0)
     p_ens = float(bundle["ensemble"].predict_proba(X)[0, 1])
     p_log = float(bundle["logistic"].predict_proba(X[bundle["elo_only_features"]])[0, 1])

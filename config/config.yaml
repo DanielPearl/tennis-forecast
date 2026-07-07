@@ -131,12 +131,16 @@ live_rules:
 # practical floor for an edge to be tradeable, not theoretical.
 # ---------------------------------------------------------------------
 trading:
-  # Unified cautious floor across every Kalshi bot. See
-  # kalshi_sdk.validators.UNIFIED_VALIDATOR_DEFAULTS for the rationale.
-  # Prob bounds 25-75c, min EV 0.03, min edge 0.05, max entry 70c, spread 6c.
+  # 695-trade paper audit (2026-07-07) showed the 5-15pp edge bucket ran
+  # -0.7% ROI across 436 opens (63% of trades) while the 15pp+ bucket ran
+  # +2-9% across the other ~250. Everything below 15pp is model noise
+  # against a slightly-more-accurate Kalshi mid — raising the floor
+  # kills the losing tail without touching the wins. The old unified
+  # 5c floor lives on for the other bots that don't have this depth
+  # of paper history yet.
   slippage_pct: 0.02
-  small_edge_min: 0.05
-  strong_edge_min: 0.09
+  small_edge_min: 0.15
+  strong_edge_min: 0.18
   min_ev: 0.03
   require_strong_edge: false
   min_market_prob: 0.25

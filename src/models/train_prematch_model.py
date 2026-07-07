@@ -327,13 +327,26 @@ def train_and_persist() -> dict[str, Any]:
     )
     ens_p_test = ensemble.predict_proba(X_test)[:, 1]
 
-    # 4) Final blend: optimised ensemble + Elo-only logistic (70/30).
-    #    The split is kept at the previous default — the dashboard
-    #    surfaces both components so the operator can see the
-    #    per-trade decomposition; the data-driven optimisation lives
-    #    INSIDE the ensemble component, not at this outer layer.
-    blend_w_ens = 0.70
-    blend_w_log = 0.30
+    # 4) Final blend — pick the (ensemble, elo-only-logistic) split on
+    #    the validation slice rather than hard-coding 70/30. The
+    #    2026-07-06 wider-history retrain showed 70/30 blend giving up
+    #    ~0.7pp accuracy vs the ensemble alone; the audit two weeks
+    #    earlier flagged the same overconfidence pattern (60% predicted
+    #    → 43% actual). Scan a small grid and take whichever weight
+    #    yields the lowest val log-loss. Reverts naturally to 70/30 if
+    #    that split really is best; usually now lands near (1.0, 0.0)
+    #    on wide-data runs where the ensemble dominates.
+    val_p_ens = ensemble.predict_proba(X_val)[:, 1]
+    val_p_log = base.predict_proba(X_val[elo_only_features])[:, 1]
+    def _outer_blend_loss(w_ens: float) -> float:
+        blend_val = np.clip(w_ens * val_p_ens + (1 - w_ens) * val_p_log,
+                             1e-6, 1 - 1e-6)
+        return float(log_loss(y_val, blend_val))
+    blend_grid = [1.0, 0.9, 0.8, 0.7, 0.5, 0.3, 0.0]
+    blend_w_ens = min(blend_grid, key=_outer_blend_loss)
+    blend_w_log = 1.0 - blend_w_ens
+    log.info("outer blend: w_ens=%.2f w_log=%.2f val_logloss=%.4f",
+              blend_w_ens, blend_w_log, _outer_blend_loss(blend_w_ens))
     blend_p = blend_w_ens * ens_p_test + blend_w_log * base_p_test
 
     metrics = {

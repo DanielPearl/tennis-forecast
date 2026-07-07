@@ -110,7 +110,7 @@ def run_backtest(use_synthetic_market: bool = True) -> dict:
             volatility=0.0, injury_flag=False,
             market_overreaction=False, rules_fired=[],
         )
-        traded = sig.label in ("SMALL_EDGE", "STRONG_EDGE", "MARKET_OVERREACTION")
+        traded = sig.label in ("SMALL_EDGE", "STRONG_EDGE")
         # PnL: stake = bet_size; if we win, we make (1 - side_market - slippage)
         # per dollar; if we lose, we lose (side_market + slippage) per dollar.
         if traded:
