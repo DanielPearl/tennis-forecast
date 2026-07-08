@@ -114,7 +114,30 @@ def build_elo_features(matches: pd.DataFrame, state_cfg: dict | None = None
       - blended_elo_diff (weighted combination — surface_blend on surface)
     """
     state = EloState(**(state_cfg or {}))
-    df = matches.sort_values("tourney_date").reset_index(drop=True).copy()
+    # 2026-07-08: within a tournament, Sackmann stamps every match with
+    # the same START date. A plain sort on tourney_date leaves a Grand
+    # Slam's ~250 matches tied on the sort key with pandas' unstable
+    # default order, which lets later rounds (F, SF, QF) be Elo-updated
+    # BEFORE earlier ones (R128, R64) from the same tournament. That
+    # runs the K-updates in the wrong causal order — the winner of a
+    # SF gets their rating updated with the SF result before the R32
+    # match is processed, so their pre-match Elo for R32 already
+    # includes the SF outcome. Sort by (date, round_rank, match_num)
+    # so a single-tournament block is processed strictly R128 → F.
+    _ROUND_ORDER = {"R128": 1, "R64": 2, "R32": 3, "R16": 4, "QF": 5,
+                     "SF": 6, "F": 8, "RR": 4, "BR": 6}
+    df = matches.copy()
+    df["_round_rank_sort"] = df.get("round", "").apply(
+        lambda r: _ROUND_ORDER.get(r, 0) if isinstance(r, str) else 0
+    )
+    df["_match_num_sort"] = pd.to_numeric(
+        df.get("match_num"), errors="coerce",
+    ).fillna(0).astype(int)
+    df = df.sort_values(
+        ["tourney_date", "_round_rank_sort", "_match_num_sort"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    df = df.drop(columns=["_round_rank_sort", "_match_num_sort"])
     cols = {
         "winner_elo_pre": [],
         "loser_elo_pre": [],

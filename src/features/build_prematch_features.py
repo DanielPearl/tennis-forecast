@@ -164,8 +164,35 @@ def _rolling_form_features(df: pd.DataFrame) -> pd.DataFrame:
     look up the player's prior state before applying the row's
     update. This guarantees no in-row leakage — the very feature the
     model sees is the value it would have had at match time.
+
+    2026-07-08 correctness fix: Sackmann stamps every match in a
+    tournament with the tournament's START date, so a plain sort on
+    ``tourney_date`` leaves ~250 matches for a Grand Slam sharing the
+    same key and pandas' default sort is unstable within the tie.
+    That let later rounds be processed BEFORE earlier ones — e.g.
+    Vondrousova's Wimbledon 2023 final at row 174 while her R128 was
+    at row 175. When R128 was reached her ``last_match_date`` had
+    already been updated to today's date by the earlier-processed
+    later rounds, so ``days_rest = 0`` for every match she'd play,
+    while opponents she beat in R128 kept a 7-day-old
+    ``last_match_date`` from the previous tournament → ``days_rest =
+    7``. Net effect: ``diff_days_rest`` and ``diff_matches_last_7d``
+    became a proxy for "who advances deeper in this tournament,"
+    which is the target. Permutation importance ranked them #1 and
+    #3 on the broken bundle. Sorting by (date, round_rank, match_num)
+    makes R128 come before R64 before R32 ... before F, so each row
+    is processed with only genuinely-prior state.
     """
-    df = df.sort_values("tourney_date").reset_index(drop=True)
+    df = df.copy()
+    df["_round_rank_sort"] = df["round"].apply(_round_rank)
+    df["_match_num_sort"] = pd.to_numeric(
+        df.get("match_num"), errors="coerce",
+    ).fillna(0).astype(int)
+    df = df.sort_values(
+        ["tourney_date", "_round_rank_sort", "_match_num_sort"],
+        kind="mergesort",  # stable
+    ).reset_index(drop=True)
+    df = df.drop(columns=["_round_rank_sort", "_match_num_sort"])
 
     # ---- Legacy per-player rolling buffers (kept intact) ------------
     last5_results: dict[str, deque] = defaultdict(lambda: deque(maxlen=5))
