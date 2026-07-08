@@ -236,18 +236,15 @@ def collapse_to_matches(markets: list[dict],
     is deterministic across ticks. Output schema matches the live-
     state file the rest of the bot already consumes.
 
-    ``prev_markets_by_ticker`` carries the last-tick YES asks so we
-    can compute ``market_prob_a_prev`` for the overreaction rule.
+    ``prev_markets_by_ticker`` carries the last-tick YES asks so
+    a downstream consumer can compute a market-move signal if it
+    wants one.
 
-    ``live_state_by_key`` is the optional output of
-    ``api_tennis_live.build_state_by_key`` — a ``{name_key → state}``
-    dict from api-tennis.com's livescore endpoint. When passed in
-    AND the Kalshi match's (player_a, player_b) match a live entry,
-    the in-match state fields (set_score_a/b, current_set_games_a/b,
-    is_tiebreak, is_decider, progress, serving_a, games_won_last_3,
-    current_set, best_of) are populated with real data instead of
-    the zero defaults. ``None`` keeps the historic zero-filled
-    behaviour so callers that don't pass it see no change.
+    ``live_state_by_key`` was previously the output of
+    ``api_tennis_live.build_state_by_key``; the in-match adjustment
+    layer was removed on 2026-07-08 and the parameter is now a
+    no-op. Kept in the signature for callers that still pass it so
+    upgrades don't need to be atomic across processes.
     """
     by_event: dict[str, list[dict]] = {}
     for m in markets:
@@ -302,22 +299,11 @@ def collapse_to_matches(markets: list[dict],
                 winner_side = "PLAYER_A"
             elif yb >= 99:
                 winner_side = "PLAYER_B"
-        # Merge in real in-match state when the live feed has this
-        # match. Without a feed (or with an unmatched name) we fall
-        # back to the historic zero-filled defaults so the rules
-        # layer + in-match model degrade to "pre-match prob with no
-        # adjustment" rather than crashing.
+        # In-match state feed removed 2026-07-08. Downstream code
+        # tolerates zero-filled state (it never reads the in-match
+        # fields anymore) but we keep the ``live_state`` dict so the
+        # row schema is unchanged.
         live_state: dict[str, Any] = {}
-        if live_state_by_key:
-            try:
-                from . import api_tennis_live
-                merged = api_tennis_live.lookup_for_kalshi(
-                    live_state_by_key, player_a, player_b,
-                )
-                if merged:
-                    live_state = merged
-            except Exception:  # noqa: BLE001 — live merge is best-effort
-                live_state = {}
 
         out.append({
             # Use the event_ticker as the canonical match_id — stable

@@ -1,21 +1,18 @@
 """End-to-end watchlist exporter.
 
-Takes the live-state records (provider OR fixture), runs each through:
-  pre-match model → live adjustment → EV/edge → signal label
+Each tick takes the live-market records (Kalshi feed) and runs them
+through:
+
+  pre-match model → EV/edge → signal label → buy gate
 
 …and writes both CSV and JSON outputs. The dashboard server reads the
 JSON file directly; downstream tools (Sheets, Notion) can pull the CSV.
 
-Output schema is exactly the one the user spec'd:
-
-  match_id, tournament, surface, player_a, player_b,
-  pre_match_prob_a, pre_match_prob_b,
-  live_prob_a, live_prob_b,
-  market_prob_a, market_prob_b,
-  edge_a, edge_b, ev_a, ev_b,
-  confidence_score, volatility_score,
-  injury_news_flag, recommended_action, reason_for_signal,
-  current_score, last_updated
+The in-match adjustment layer was removed on 2026-07-08 — the bot now
+places bets based purely on the pre-match model's prob vs the Kalshi
+market. ``live_prob_a`` is kept in the output schema as an alias of
+``pre_match_prob_a`` so downstream consumers (dashboard renderers,
+simulator, live executor) don't need schema updates.
 """
 from __future__ import annotations
 
@@ -27,8 +24,6 @@ from typing import Any
 import pandas as pd
 
 from ..data.fetch_live_scores import load_live_state
-from ..features.build_live_features import standardize
-from ..models.live_adjustment_model import adjust as live_adjust
 from ..models.predict import safe_predict
 from ..trading.buy_gate import evaluate as evaluate_buy
 from ..trading.ev import ev as ev_calc
@@ -61,11 +56,25 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     for raw in live_records:
-        rec = standardize(raw)
+        market_prob_a = raw.get("market_prob_a")
+        try:
+            market_prob_a = float(market_prob_a) if market_prob_a is not None else None
+        except (TypeError, ValueError):
+            market_prob_a = None
+        rec = {
+            "match_id": str(raw.get("match_id") or ""),
+            "tournament": raw.get("tournament") or "Unknown",
+            "surface": raw.get("surface") or "Hard",
+            "player_a": raw.get("player_a") or "",
+            "player_b": raw.get("player_b") or "",
+            "market_prob_a": market_prob_a,
+            "set_score_a": int(raw.get("set_score_a") or 0),
+            "set_score_b": int(raw.get("set_score_b") or 0),
+        }
 
         pre = safe_predict(
             rec["player_a"], rec["player_b"],
-            surface=rec.get("surface", "Hard"),
+            surface=rec["surface"],
             level=raw.get("level", "A"),
             round_=raw.get("round", "R32"),
             rank_a=raw.get("rank_a"), rank_b=raw.get("rank_b"),
@@ -78,10 +87,10 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         # gate out new orders on the consuming side.
         model_source = pre.get("model_source", "trained")
 
-        adj = live_adjust(pre_prob_a, rec)
-        live_prob_a = adj.live_prob_a
-
-        market_prob_a = rec.get("market_prob_a")
+        # Pre-match-only mode: live_prob is an alias for pre_match_prob
+        # (no in-match adjustment layer). Kept in the output schema so
+        # downstream code that reads ``live_prob_a`` keeps working.
+        live_prob_a = pre_prob_a
         market_prob_b = (1.0 - market_prob_a) if market_prob_a is not None else None
 
         edge_a = (live_prob_a - market_prob_a) if market_prob_a is not None else None
@@ -92,10 +101,8 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
 
         sig = label_match(
             live_prob_a, market_prob_a,
-            volatility=adj.volatility_score,
-            injury_flag=adj.injury_news_flag,
-            market_overreaction=adj.market_overreaction,
-            rules_fired=adj.rules_fired,
+            volatility=0.0, injury_flag=False,
+            market_overreaction=False, rules_fired=[],
         )
 
         # Stage the row, then evaluate the BUY gate against it so the
@@ -121,8 +128,8 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "ev_a": round(ev_a, 4) if ev_a is not None else None,
             "ev_b": round(ev_b, 4) if ev_b is not None else None,
             "confidence_score": round(sig.confidence_score, 4),
-            "volatility_score": round(adj.volatility_score, 4),
-            "injury_news_flag": bool(adj.injury_news_flag),
+            "volatility_score": 0.0,
+            "injury_news_flag": False,
             "recommended_action": sig.label,
             "reason_for_signal": sig.reason,
             "last_updated": now,

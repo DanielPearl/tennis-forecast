@@ -25,7 +25,7 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
 from src.dashboard.export_watchlist import build_watchlist_records, export
-from src.data import api_tennis_live, kalshi_markets
+from src.data import kalshi_markets
 from src.trading.simulator import tick as simulator_tick
 from src.utils.config import load_config
 from src.utils.logging_setup import setup_logging
@@ -60,17 +60,14 @@ def _one_tick() -> None:
     raw_markets = kalshi_markets.fetch_tennis_markets()
     # Snapshot per-ticker so the next tick's collapse can read prev_yes.
     new_prev = {m.get("ticker"): m for m in raw_markets if m.get("ticker")}
-    # Optional: live in-match state from api-tennis.com. When
-    # API_TENNIS_KEY isn't set or the fetch fails, returns {} and
-    # collapse_to_matches falls back to zero-filled defaults — same
-    # behaviour as before the live feed existed.
-    live_state_by_key = api_tennis_live.build_state_by_key(
-        api_tennis_live.fetch_livescore()
-    )
+    # In-match state feed removed 2026-07-08 — the pre-match model is
+    # the only forecast we run now. ``collapse_to_matches`` takes
+    # ``live_state_by_key=None`` and zero-fills the in-match fields
+    # the pre-match panel never reads anyway.
     records = kalshi_markets.collapse_to_matches(
         raw_markets,
         prev_markets_by_ticker=_prev_market_by_ticker,
-        live_state_by_key=live_state_by_key,
+        live_state_by_key=None,
     )
     _prev_market_by_ticker = new_prev
     kalshi_markets.write_live_state(records)

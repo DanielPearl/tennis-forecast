@@ -36,9 +36,6 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--skip-train", action="store_true",
                    help="Skip the (slow) re-train step; just rebuild the watchlist.")
-    p.add_argument("--retrain-inmatch", action="store_true",
-                   help="Refresh slam PBP and retrain the in-match adjustment model. "
-                        "Slam draws don't change daily, so this stays off by default.")
     args = p.parse_args()
 
     if not args.skip_train:
@@ -46,26 +43,6 @@ def main() -> None:
         metrics = train_and_persist()
         log.info("training done. accuracy=%.3f brier=%.3f",
                  metrics["blended"]["accuracy"], metrics["blended"]["brier"])
-
-    if args.retrain_inmatch:
-        # Local imports — these pull heavy deps (sklearn calibration)
-        # and we only want them on the days we actually refresh PBP.
-        from src.data.fetch_pbp import fetch_all as fetch_pbp_all
-        from src.features.build_pbp_snapshots import build_snapshots
-        from src.models.train_inmatch_model import train_and_eval as train_inmatch
-        from src.utils.config import load_config, resolve_path
-
-        log.info("refreshing slam PBP…")
-        bundles = fetch_pbp_all()
-        snaps = build_snapshots(bundles["matches"], bundles["points"])
-        cfg = load_config()
-        out = resolve_path(cfg["paths"]["processed_dir"]) / "pbp_snapshots.csv"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        snaps.to_csv(out, index=False)
-        log.info("retraining in-match model on %d snapshots…", len(snaps))
-        inm = train_inmatch()
-        log.info("in-match model: brier=%.4f vs rules baseline=%.4f",
-                 inm["model"]["brier"], inm["rules_baseline"]["brier"])
 
     log.info("building watchlist…")
     csv_path, json_path = export()

@@ -72,56 +72,14 @@ model:
     learning_rate: 0.05
     max_depth: 4
 
-# ---------------------------------------------------------------------
-# Live-adjustment rules. Phase-1 keeps these explicit so we can debug
-# every nudge; phase-2 will replace them with a small ML adjustment
-# model trained on point-by-point logs once we have enough closed bets.
-# Numbers below are conservative deltas — they shift the baseline
-# probability by at most ~6pp under realistic in-match scenarios.
-# ---------------------------------------------------------------------
-live_rules:
-  # Each completed game shifts the baseline toward the in-match leader
-  # by `per_game_weight`, capped at `max_in_match_shift`.
-  #
-  # Zeroed 2026-06-02: live adjustment was adding overconfidence on
-  # top of an already-imperfect pre-match calibration. Setting weight
-  # to 0 here AND ``use_trained_inmatch_model: false`` below makes
-  # live_prob_a = pre_match_prob_a, so the bot trades on the
-  # Platt-calibrated pre-match prediction with no in-match nudge.
-  per_game_weight: 0.0
-  max_in_match_shift: 0.0
-  # First-serve % drop ≥ this much vs match average → fatigue/injury hint.
-  first_serve_pct_drop_flag: 0.10
-  # If serve % is unusually strong, flag "underlying stats remain strong"
-  # — useful for the "lost a set but stats are good" rebound case.
-  serve_strength_z_threshold: 0.7
-  # Tiebreak / 5th-set / medical timeout → bump volatility score.
-  tiebreak_volatility_bump: 0.20
-  decider_volatility_bump: 0.15
-  medical_timeout_volatility_bump: 0.25
-  injury_risk_drop_threshold: 0.05  # serve %
-  # Serve-velocity decline (trailing-10 first-serve speed minus match
-  # baseline) → nudge against the slowing player. ≥ 8 km/h drop fires
-  # the rule; this is the magnitude of the negative-direction delta.
-  serve_speed_decline_pp: 0.04
-  # Market-overreaction band. If the market moved more than `overreaction_market_move`
-  # while the model-adjusted probability moved less than `overreaction_model_move`,
-  # we flag MARKET_OVERREACTION (only one direction at a time).
-  overreaction_market_move: 0.07
-  overreaction_model_move: 0.025
-  # Use the trained PBP-based in-match adjustment model
-  # (data/processed/artifacts/inmatch_model.joblib) instead of the
-  # rules-only nudge. Falls back to rules when the artifact is missing.
-  # Backtest on 2024 slam PBP: Brier 0.175 vs rules 0.226 (22.7% better).
-  #
-  # Disabled 2026-06-02: on 30 real Kalshi bets, the live-prob bucket
-  # 55-65% won only 40% (15pp overconfident) and average live_prob
-  # for losers (50.1%) exceeded average for winners (47.0%) — a sign
-  # the in-match adjustment is adding noise/bias rather than signal.
-  # Until we rebuild the pre-match model and re-train an inmatch
-  # variant on top of that, the bot trades on calibrated pre-match
-  # prob only (per_game_weight=0 below also zeroes the rules layer).
-  use_trained_inmatch_model: false
+# The ``live_rules:`` block used to configure a rules-based in-match
+# adjustment layer (per-game shift, tiebreak volatility bumps, market-
+# overreaction detection). That layer was zeroed in 2026-06-02 because
+# on 30 real Kalshi bets it was adding overconfidence on top of an
+# already-imperfect pre-match calibration, and removed entirely on
+# 2026-07-08 alongside the api-tennis.com live-score feed. The bot now
+# trades on the pre-match prediction against the current Kalshi
+# market price, with no in-match nudge.
 
 # ---------------------------------------------------------------------
 # Trading thresholds. Conservative on purpose: we'd rather print fewer
