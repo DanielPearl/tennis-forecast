@@ -211,9 +211,33 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "event_title": raw.get("event_title"),
         }
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
-        # buy_gates and buy_blockers using the shared evaluator (same
-        # rules the simulator applies before it actually opens).
-        decision = evaluate_buy(row, cfg.get("trading") or {})
+        # buy_gates and buy_blockers using the shared evaluator.
+        #
+        # We feed Pinnacle's devigged probability (not our internal
+        # model) as the ``live_prob_a`` the gate compares against
+        # Kalshi. Pinnacle is the sharpest global reference, so a
+        # Kalshi price that disagrees with Pinnacle is a real edge;
+        # a Kalshi price that only disagrees with our model is just
+        # our model being wrong. If Pinnacle isn't listing the match
+        # (Challenger / ITF / between-tournaments), skip the buy —
+        # trading without a sharp reference is what got us into the
+        # miscalibration hole in the first place.
+        if pinnacle_prob_a is not None:
+            gate_row = dict(row)
+            gate_row["live_prob_a"] = pinnacle_prob_a
+            if market_prob_a is not None:
+                gate_row["ev_a"] = ev_calc(
+                    pinnacle_prob_a, market_prob_a, slip,
+                ).ev_per_contract
+                gate_row["ev_b"] = ev_calc(
+                    1 - pinnacle_prob_a, 1 - market_prob_a, slip,
+                ).ev_per_contract
+            decision = evaluate_buy(gate_row, cfg.get("trading") or {})
+        else:
+            decision = evaluate_buy(row, cfg.get("trading") or {})
+            decision.eligible = False
+            decision.score = 0.0
+            decision.blockers = list(decision.blockers) + ["no_pinnacle_reference"]
         row["buy_eligible"] = bool(decision.eligible)
         row["buy_score"] = round(float(decision.score), 6)
         row["buy_side"] = decision.side
