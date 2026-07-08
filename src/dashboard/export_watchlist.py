@@ -226,6 +226,12 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             # the user sees when they click the ticker. Pass it through
             # so the dashboard's Title column matches the click target.
             "event_title": raw.get("event_title"),
+            # Kalshi's ``rules_primary`` string for this contract —
+            # the paragraph the dashboard's Kalshi-rules section
+            # renders verbatim. Available on every market via the
+            # Kalshi markets API; the tennis feed already reads it
+            # into ``raw`` in ``collapse_to_matches``.
+            "rules_primary": raw.get("rules_primary"),
         }
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
         # buy_gates and buy_blockers using the shared evaluator.

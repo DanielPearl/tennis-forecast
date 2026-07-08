@@ -41,14 +41,18 @@ from ..utils.logging_setup import setup_logging
 log = setup_logging("data.kalshi_markets")
 
 
-# ATP + WTA main-tour match-level series only. Challenger and ITF
-# Futures markets exist on Kalshi (~330 events combined) but the bot
-# is configured to forecast tour-level singles only — the Sackmann
-# training data is overwhelmingly tour-level, and below-tour events
-# have noisier player pools where the model's calibration degrades.
+# Every Kalshi tennis-match series. ITF Futures + Challenger events
+# were previously excluded because the Sackmann-trained model was
+# poorly calibrated on non-tour player pools. That rationale went
+# away when the buy gate switched to Pinnacle's devigged prob (a
+# sharp global reference) — a row without a Pinnacle reading now
+# renders on the watchlist but is auto-skipped by the
+# ``no_pinnacle_reference`` blocker, and rows Pinnacle DOES cover
+# are evaluated on sharp-book edge, not model calibration.
 _TENNIS_SERIES = (
     "KXATPMATCH",   # ATP main-tour matches
     "KXWTAMATCH",   # WTA main-tour matches
+    "KXITFMATCH",   # ITF Futures (men + women, both singles)
 )
 
 # "Will {Player Name} win the {LastA} vs {LastB}: {Round} match?"
