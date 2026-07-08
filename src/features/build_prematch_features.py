@@ -183,16 +183,17 @@ def _rolling_form_features(df: pd.DataFrame) -> pd.DataFrame:
     makes R128 come before R64 before R32 ... before F, so each row
     is processed with only genuinely-prior state.
     """
-    df = df.copy()
-    df["_round_rank_sort"] = df["round"].apply(_round_rank)
-    df["_match_num_sort"] = pd.to_numeric(
+    # Vectorised sort keys — .apply(lambda) on 350k rows was pushing
+    # peak RSS past the droplet's OOM ceiling during the panel build.
+    _ROUND_ORDER = {"R128": 1, "R64": 2, "R32": 3, "R16": 4, "QF": 5,
+                     "SF": 6, "F": 8, "RR": 4, "BR": 6}
+    rk = df["round"].map(_ROUND_ORDER).fillna(0).astype("int8")
+    mn = pd.to_numeric(
         df.get("match_num"), errors="coerce",
-    ).fillna(0).astype(int)
-    df = df.sort_values(
-        ["tourney_date", "_round_rank_sort", "_match_num_sort"],
-        kind="mergesort",  # stable
-    ).reset_index(drop=True)
-    df = df.drop(columns=["_round_rank_sort", "_match_num_sort"])
+    ).fillna(0).astype("int32")
+    df = df.assign(_r=rk, _m=mn).sort_values(
+        ["tourney_date", "_r", "_m"], kind="mergesort",
+    ).drop(columns=["_r", "_m"]).reset_index(drop=True)
 
     # ---- Legacy per-player rolling buffers (kept intact) ------------
     last5_results: dict[str, deque] = defaultdict(lambda: deque(maxlen=5))

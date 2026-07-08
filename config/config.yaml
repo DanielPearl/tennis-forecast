@@ -26,18 +26,17 @@ data:
   atp_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master
   wta_repo_base: https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master
   # Years pulled on `scripts/run_daily_prematch.py --refresh-data`.
-  # Full Open Era window (1968 → present) for maximum Elo history and
-  # career-rate stability. Sackmann publishes ATP files back to 1968
-  # and WTA files back to the 1920s; ``fetch_year`` treats a 404 as
-  # "year not published" and skips silently, so any early WTA gaps
-  # are harmless. Rows are still cheap — ~3-4k tour-level matches
-  # per tour per year × ~58 years × 2 tours settles around 400k
-  # matches, doubled to ~800k after y-balance mirroring. Serve/return
-  # columns only become reliable in the Sackmann files ~1991, but
-  # the trainer imputes missing values so pre-1991 matches still
-  # contribute Elo + form dynamics without polluting the rolling
-  # serve-percent features.
-  history_start_year: 1968
+  # 2026-07-08: narrowed 1968 → 2005 after the OOM-kill on the wider
+  # window. The droplet is only 2GB RAM and the 2000-row-per-year
+  # rolling-form builder holds ~40 per-player deques in memory across
+  # ~30k players; going all the way back to 1968 pushed peak RSS
+  # over 1.75GB during the panel build and got the process killed
+  # before the model bundle was written. 20 years of history (2005 →
+  # present) is plenty for the Elo state to converge on tour-level
+  # players; if we ever want the full open era back we should first
+  # refactor the panel build to stream rather than materialise the
+  # whole dataframe.
+  history_start_year: 2005
   history_end_year: 2026
   tours: ["atp", "wta"]
 

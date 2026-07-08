@@ -126,18 +126,16 @@ def build_elo_features(matches: pd.DataFrame, state_cfg: dict | None = None
     # so a single-tournament block is processed strictly R128 → F.
     _ROUND_ORDER = {"R128": 1, "R64": 2, "R32": 3, "R16": 4, "QF": 5,
                      "SF": 6, "F": 8, "RR": 4, "BR": 6}
-    df = matches.copy()
-    df["_round_rank_sort"] = df.get("round", "").apply(
-        lambda r: _ROUND_ORDER.get(r, 0) if isinstance(r, str) else 0
-    )
-    df["_match_num_sort"] = pd.to_numeric(
-        df.get("match_num"), errors="coerce",
-    ).fillna(0).astype(int)
-    df = df.sort_values(
-        ["tourney_date", "_round_rank_sort", "_match_num_sort"],
-        kind="mergesort",
-    ).reset_index(drop=True)
-    df = df.drop(columns=["_round_rank_sort", "_match_num_sort"])
+    # Vectorised map + int8/int32 dtypes so the temporary sort keys
+    # don't materialise as object columns (which would push RSS past
+    # the droplet's OOM ceiling on the 350k-row panel).
+    rk = matches["round"].map(_ROUND_ORDER).fillna(0).astype("int8")
+    mn = pd.to_numeric(
+        matches.get("match_num"), errors="coerce",
+    ).fillna(0).astype("int32")
+    df = matches.assign(_r=rk, _m=mn).sort_values(
+        ["tourney_date", "_r", "_m"], kind="mergesort",
+    ).drop(columns=["_r", "_m"]).reset_index(drop=True)
     cols = {
         "winner_elo_pre": [],
         "loser_elo_pre": [],
