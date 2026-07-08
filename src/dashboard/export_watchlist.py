@@ -265,6 +265,86 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
     return out
 
 
+def _write_effective_config(cfg: dict[str, Any], json_path: Path) -> None:
+    """Dump the tennis bot's *actual* buy-side thresholds to
+    ``effective_config.json`` next to the watchlist. The trading
+    dashboard reads this to render the "what does this bot need before
+    it'll buy?" modal against real numbers instead of generic macro-bot
+    defaults. Silently no-ops on any error — the dashboard already
+    tolerates a missing file (falls back to display defaults).
+    """
+    try:
+        t = cfg.get("trading") or {}
+        pmin = float(t.get("min_market_prob", 0.0))
+        pmax = float(t.get("max_market_prob", 1.0))
+        payload = {
+            "captured_at": datetime.now(timezone.utc).isoformat(
+                timespec="seconds").replace("+00:00", "Z"),
+            "edge": {
+                "min_ev_per_contract": float(t.get("min_ev", 0.03)),
+                "min_prob_edge_over_breakeven": float(t.get("small_edge_min", 0.05)),
+                "min_raw_model_edge": float(t.get("small_edge_min", 0.05)),
+                "max_entry_price_cents": t.get("max_entry_price_cents"),
+                "min_model_confidence": None,
+                "min_model_accuracy": None,
+            },
+            "validators": {
+                "max_spread_cents": t.get("max_spread_cents"),
+                "min_open_interest": t.get("min_open_interest"),
+                "prob_bounds_cents": [int(round(pmin * 100)),
+                                        int(round(pmax * 100))],
+                "min_book_depth_contracts": None,
+                "min_volume": None,
+                "min_depth_at_best_ask": None,
+                "min_minutes_to_close": None,
+                "max_minutes_to_close": None,
+                "basis_risk_strike_window_dollars": None,
+                "basis_risk_max_hours_to_close": None,
+            },
+            "risk": {
+                "bet_size_cents": int(round(float(t.get("bet_size", 1.0)) * 100)),
+                "max_open_positions": t.get("max_open_positions"),
+                "max_total_exposure_cents": None,
+                "max_bets_per_day": None,
+                "cooldown_seconds_same_market": None,
+            },
+            "hedge": {
+                "enabled": True,
+                "profit_lock_cents": None,
+                "stop_loss_cents": None,
+                "hedge_size_fraction": None,
+                "profit_lock_market_prob": t.get("profit_lock_market_prob"),
+            },
+            "extra": {
+                "kind": "tennis",
+                "reference_book": "pinnacle_devigged",
+                "notes": (
+                    "This bot compares Kalshi to Pinnacle's devigged "
+                    "probability (a sharp global reference), NOT the "
+                    "internal model. Edge shown in every column is "
+                    "Pinnacle − Kalshi. Rows Pinnacle doesn't list "
+                    "(Challenger / ITF / between-tournaments) are "
+                    "always skipped with a ``no_pinnacle_reference`` "
+                    "blocker."
+                ),
+                "strong_edge_min": float(t.get("strong_edge_min",
+                                                 t.get("small_edge_min", 0.05))),
+                "max_edge_skip": t.get("max_edge_skip"),
+                "taper_edge_above": t.get("taper_edge_above"),
+                "taper_min_stake_frac": t.get("taper_min_stake_frac"),
+                "max_tradable_volatility": t.get("max_tradable_volatility"),
+                "slippage_pct": t.get("slippage_pct"),
+            },
+        }
+        eff_path = json_path.parent / "effective_config.json"
+        tmp = eff_path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+        tmp.replace(eff_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("effective_config.json write failed: %s", exc)
+
+
 def export(records: list[dict[str, Any]] | None = None) -> tuple[Path, Path]:
     cfg = load_config()
     csv_path = resolve_path(cfg["paths"]["watchlist_csv"])
@@ -276,6 +356,7 @@ def export(records: list[dict[str, Any]] | None = None) -> tuple[Path, Path]:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"generated_at": datetime.now(timezone.utc).isoformat(),
                    "rows": rows}, f, indent=2, default=str)
+    _write_effective_config(cfg, json_path)
     log.info("wrote %s + %s (%d rows)", csv_path, json_path, len(rows))
     return csv_path, json_path
 
