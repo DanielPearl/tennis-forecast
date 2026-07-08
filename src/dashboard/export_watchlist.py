@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from ..data.fetch_live_scores import load_live_state
+from ..data.fetch_odds import pinnacle_probs_by_pair
 from ..models.predict import safe_predict
 from ..trading.buy_gate import evaluate as evaluate_buy
 from ..trading.ev import ev as ev_calc
@@ -51,6 +52,14 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
 
     if live_records is None:
         live_records = load_live_state()
+
+    # Pinnacle line lookup for the whole batch. One API call per
+    # currently-active tennis sport key, cached 5 min inside
+    # ``fetch_odds`` so per-tick cost stays inside the 20K/mo quota
+    # of The Odds API's paid tier. Empty dict silently when the key
+    # isn't set or the API is down — every downstream user tolerates
+    # a missing pinnacle_prob field.
+    pinnacle_lookup = pinnacle_probs_by_pair()
 
     out: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -93,6 +102,44 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         live_prob_a = pre_prob_a
         market_prob_b = (1.0 - market_prob_a) if market_prob_a is not None else None
 
+        # Pinnacle probability lookup — sharp global-reference line.
+        # Matched by frozenset of (player_a, player_b) so orientation
+        # doesn't matter, then the per-side prob is picked by exact
+        # name match (falls back to loose last-name match if the Odds
+        # API spells a name slightly differently than Kalshi).
+        pinnacle_prob_a = None
+        pinnacle_prob_b = None
+        pair_key = frozenset({rec["player_a"], rec["player_b"]})
+        pinn_map = pinnacle_lookup.get(pair_key)
+        if pinn_map is None and rec["player_a"] and rec["player_b"]:
+            # Loose fallback — a hyphen / diacritic / initial difference
+            # on ONE player would drop the exact match. Scan for a
+            # frozenset that shares last-name tokens with both.
+            la = rec["player_a"].split()[-1].lower()
+            lb = rec["player_b"].split()[-1].lower()
+            for key_set, probs in pinnacle_lookup.items():
+                keyed_names = list(key_set)
+                if len(keyed_names) != 2: continue
+                lnames = [n.split()[-1].lower() for n in keyed_names]
+                if la in lnames and lb in lnames:
+                    pinn_map = probs
+                    break
+        if pinn_map is not None:
+            # Now pick out which pinn_map entry is player_a's prob.
+            # Try exact first, then loose last-name match.
+            for name, prob in pinn_map.items():
+                if name == rec["player_a"]:
+                    pinnacle_prob_a = float(prob)
+                    break
+            if pinnacle_prob_a is None and rec["player_a"]:
+                la = rec["player_a"].split()[-1].lower()
+                for name, prob in pinn_map.items():
+                    if la in name.lower():
+                        pinnacle_prob_a = float(prob)
+                        break
+            if pinnacle_prob_a is not None:
+                pinnacle_prob_b = 1.0 - pinnacle_prob_a
+
         edge_a = (live_prob_a - market_prob_a) if market_prob_a is not None else None
         edge_b = -edge_a if edge_a is not None else None
 
@@ -123,6 +170,14 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "live_prob_b": round(1 - live_prob_a, 4),
             "market_prob_a": round(market_prob_a, 4) if market_prob_a is not None else None,
             "market_prob_b": round(market_prob_b, 4) if market_prob_b is not None else None,
+            # Pinnacle devigged probability — sharp reference line pulled
+            # from The Odds API. None when the API key isn't set, the
+            # match isn't listed on The Odds API (e.g. Challenger/ITF
+            # events), or the API's returning an empty book for it.
+            "pinnacle_prob_a": (round(pinnacle_prob_a, 4)
+                                 if pinnacle_prob_a is not None else None),
+            "pinnacle_prob_b": (round(pinnacle_prob_b, 4)
+                                 if pinnacle_prob_b is not None else None),
             "edge_a": round(edge_a, 4) if edge_a is not None else None,
             "edge_b": round(edge_b, 4) if edge_b is not None else None,
             "ev_a": round(ev_a, 4) if ev_a is not None else None,
