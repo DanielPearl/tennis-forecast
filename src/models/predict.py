@@ -6,6 +6,8 @@ vector for the matchup, and returns the calibrated win probability for
 """
 from __future__ import annotations
 
+import difflib
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,87 @@ from ..utils.logging_setup import setup_logging
 from .train_prematch_model import load_elo_state
 
 log = setup_logging("models.predict")
+
+
+# ---------------------------------------------------------------------
+# Name normalization. Kalshi and Sackmann disagree on hyphens vs
+# spaces (Felix Auger-Aliassime vs Felix Auger Aliassime), on
+# capitalization for Mc/Mac names (McCartney vs Mccartney), and on
+# diacritics (Muchová vs Muchova). Prior to this normalizer the
+# inference path was resolving 12% of Kalshi players to the Elo
+# default (rating 1500) — the audit found "unknown" hits on names
+# that WERE in the training data under a slightly different spelling.
+#
+# Resolution order: exact hit → normalised hit (lowercase, strip
+# diacritics, hyphens→spaces, strip punctuation) → fuzzy close-match
+# above _FUZZY_CUTOFF. Anything that still can't resolve gets logged
+# once so we can catch new mismatches early instead of silently
+# defaulting to Elo 1500.
+# ---------------------------------------------------------------------
+_FUZZY_CUTOFF = 0.90
+# Populated by _rebuild_name_index() on each artifact load.
+_NAME_INDEX: dict[str, str] = {}
+_UNRESOLVED_LOGGED: set[str] = set()
+
+
+def _strip_diacritics(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s)
+                    if unicodedata.category(c) != "Mn")
+
+
+def _norm(s: str) -> str:
+    """Canonical normalization: lowercase, no diacritics, hyphens→
+    spaces, no punctuation, collapsed whitespace."""
+    n = _strip_diacritics(s).lower().replace("-", " ")
+    n = "".join(c if c.isalnum() or c.isspace() else " " for c in n)
+    return " ".join(n.split())
+
+
+def _rebuild_name_index(elo_state: EloState) -> None:
+    """Refresh the normalized→canonical name map. Called from
+    _ensure_loaded whenever a fresh Elo state is loaded from disk.
+    First entry per key wins so ties resolve deterministically."""
+    global _NAME_INDEX, _UNRESOLVED_LOGGED
+    idx: dict[str, str] = {}
+    for canonical in elo_state.overall.keys():
+        key = _norm(canonical)
+        if key and key not in idx:
+            idx[key] = canonical
+    _NAME_INDEX = idx
+    _UNRESOLVED_LOGGED = set()
+
+
+def _resolve_name(name: str) -> str:
+    """Return the training-set canonical name for ``name``, or the
+    input verbatim when nothing resolves. Every downstream lookup
+    (Elo, H2H, rolling, last-match-date) is keyed on the canonical
+    form, so calling this once at match-time is enough."""
+    if not name or _ELO is None:
+        return name
+    if name in _ELO.overall:
+        return name  # already canonical — fast path
+    n = _norm(name)
+    hit = _NAME_INDEX.get(n)
+    if hit is not None:
+        return hit
+    # Fuzzy fallback — kept conservative so we don't collapse two
+    # different players into one. 0.90 catches Soonwoo Kwon → Soon Woo
+    # Kwon but rejects looser matches.
+    candidates = difflib.get_close_matches(
+        n, _NAME_INDEX.keys(), n=1, cutoff=_FUZZY_CUTOFF,
+    )
+    if candidates:
+        return _NAME_INDEX[candidates[0]]
+    # Nothing resolved — log ONCE per name so we don't spam every
+    # tick. Falling back to the input means downstream lookups miss
+    # and the feature values default to their neutral priors.
+    if name not in _UNRESOLVED_LOGGED:
+        log.warning("name-normalizer: %r not found in Elo state "
+                     "(no exact, normalized, or fuzzy match) — "
+                     "prediction will use default features",
+                     name)
+        _UNRESOLVED_LOGGED.add(name)
+    return name
 
 
 # Round-trip the heavyweight artefacts once per process — loading the
@@ -75,6 +158,9 @@ def _ensure_loaded() -> None:
     _LAST_MATCH = rest
     global _ROLLING
     _ROLLING = rolling
+    # Rebuild the canonical-name index whenever a fresh Elo state
+    # loads — the training-set player pool changes between retrains.
+    _rebuild_name_index(elo)
     if was_reload:
         log.info(
             "predict bundle reloaded from disk (mtime=%s) — daily "
@@ -132,6 +218,14 @@ def predict_match(
         ref = pd.Timestamp(match_date.date())
     else:
         ref = pd.Timestamp(match_date)
+
+    # Resolve Kalshi-formatted names to their training-set canonical
+    # form so downstream Elo / H2H / rolling / last-match-date lookups
+    # actually hit. Before the 2026-07-08 normalizer landed, ~12% of
+    # Kalshi players were resolving to the Elo default (rating 1500)
+    # purely because of hyphen-vs-space or accent differences.
+    player_a = _resolve_name(player_a)
+    player_b = _resolve_name(player_b)
 
     elo_feats = lookup_pair_features(_ELO, player_a, player_b, surface)
     # Phase-2: look up each player's persisted rolling-form snapshot.
@@ -267,6 +361,8 @@ def predict_with_elo_only(player_a: str, player_b: str, surface: str = "Hard"
         # Even the elo bundle is missing — return a literal 50/50.
         return {"prob_a": 0.5, "prob_b": 0.5, "elo_winprob_a": 0.5,
                 "model_source": "default_50_50"}
+    player_a = _resolve_name(player_a)
+    player_b = _resolve_name(player_b)
     f = lookup_pair_features(_ELO, player_a, player_b, surface)
     p = max(0.05, min(0.95, f["elo_winprob_a"]))
     return {"prob_a": p, "prob_b": 1.0 - p,
