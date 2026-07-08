@@ -140,11 +140,21 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             if pinnacle_prob_a is not None:
                 pinnacle_prob_b = 1.0 - pinnacle_prob_a
 
-        edge_a = (live_prob_a - market_prob_a) if market_prob_a is not None else None
+        # Edge + EV columns are driven by Pinnacle (the sharp reference
+        # the buy gate now uses) so the displayed numbers match the
+        # decision the bot is actually making. When Pinnacle isn't
+        # listing the match, fall back to the model view — better than
+        # showing a blank cell.
+        edge_prob_a = (pinnacle_prob_a if pinnacle_prob_a is not None
+                        else live_prob_a)
+        edge_a = ((edge_prob_a - market_prob_a)
+                    if market_prob_a is not None else None)
         edge_b = -edge_a if edge_a is not None else None
 
-        ev_a = ev_calc(live_prob_a, market_prob_a, slip).ev_per_contract if market_prob_a is not None else None
-        ev_b = ev_calc(1 - live_prob_a, 1 - market_prob_a, slip).ev_per_contract if market_prob_a is not None else None
+        ev_a = (ev_calc(edge_prob_a, market_prob_a, slip).ev_per_contract
+                  if market_prob_a is not None else None)
+        ev_b = (ev_calc(1 - edge_prob_a, 1 - market_prob_a, slip).ev_per_contract
+                  if market_prob_a is not None else None)
 
         # Signal label — use Pinnacle vs Kalshi (the same reference the
         # buy gate now uses) so ``recommended_action`` isn't stuck at
@@ -230,15 +240,12 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         # trading without a sharp reference is what got us into the
         # miscalibration hole in the first place.
         if pinnacle_prob_a is not None:
+            # The gate uses ``live_prob_a`` to compute its edge; swap
+            # in Pinnacle so the gate compares Pinnacle-vs-Kalshi. The
+            # row's own ev_a / ev_b are already Pinnacle-based (set
+            # above) so the gate reads consistent numbers.
             gate_row = dict(row)
             gate_row["live_prob_a"] = pinnacle_prob_a
-            if market_prob_a is not None:
-                gate_row["ev_a"] = ev_calc(
-                    pinnacle_prob_a, market_prob_a, slip,
-                ).ev_per_contract
-                gate_row["ev_b"] = ev_calc(
-                    1 - pinnacle_prob_a, 1 - market_prob_a, slip,
-                ).ev_per_contract
             decision = evaluate_buy(gate_row, cfg.get("trading") or {})
         else:
             decision = evaluate_buy(row, cfg.get("trading") or {})
