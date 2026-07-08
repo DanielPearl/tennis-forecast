@@ -96,12 +96,23 @@ trading:
   # 5c floor lives on for the other bots that don't have this depth
   # of paper history yet.
   slippage_pct: 0.02
-  small_edge_min: 0.15
-  strong_edge_min: 0.18
+  # 2026-07-08 re-tune for the Pinnacle-referenced gate. The prior 15pp
+  # floor was calibrated against noisy MODEL edges (the 5-15pp bucket
+  # ran -0.7% ROI because the model was over-confident on close plays).
+  # Pinnacle is a sharp global book — a 5-8pp Pinnacle-vs-Kalshi gap is
+  # a real market inefficiency, not model noise. Dropped the floor and
+  # widened the price band accordingly.
+  small_edge_min: 0.06
+  strong_edge_min: 0.12
   min_ev: 0.03
   require_strong_edge: false
-  min_market_prob: 0.25
-  max_market_prob: 0.75
+  # Widened from 0.25/0.75 → 0.10/0.90. The old band excluded deep-
+  # underdog trades that were expected to be model-uncalibrated; with
+  # Pinnacle as the reference, extremes are handled fine (that's where
+  # the sharpest disagreements show up — e.g. Kalshi 21% on Fritz
+  # vs Pinnacle's 39%, +18pp real edge, previously gate-blocked).
+  min_market_prob: 0.10
+  max_market_prob: 0.90
   max_entry_price_cents: 70
   max_tradable_volatility: 0.55
   min_open_interest: 50
@@ -149,12 +160,14 @@ trading:
   # stale / broken quote" territory (which does happen, especially on
   # Kalshi's thinner ATP/WTA books late-night US time).
   max_edge_skip: 0.35
-  # Stake taper on large-but-not-extreme edges. Between
-  # ``taper_edge_above`` and ``max_edge_skip``, scale stake linearly
-  # from full to ``taper_min_stake_frac``. Acts as Kelly-style
-  # variance protection without abandoning the trade entirely.
-  taper_edge_above: 0.08
-  taper_min_stake_frac: 0.50
+  # Stake taper was designed for MODEL edges — the premise was "bigger
+  # edge → more likely model overconfidence → smaller stake". Pinnacle
+  # doesn't have that inverse relationship (a wider Pinnacle-vs-Kalshi
+  # gap = more conviction, not less), so the taper is disabled on the
+  # Pinnacle-referenced gate. Keys omitted so ``stake_taper`` returns
+  # 1.0 (full stake) unconditionally.
+  # taper_edge_above: 0.08
+  # taper_min_stake_frac: 0.50
 
 # ---------------------------------------------------------------------
 # Dashboard. Stdlib http.server (no Flask dependency) — same pattern
