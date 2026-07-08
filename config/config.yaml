@@ -139,7 +139,16 @@ trading:
   # part of the over-confidence inside the gate's window, so the
   # 12pp ceiling was too tight (bot was sitting on 2 positions and
   # skipping +19-23pp edges on JODZVE / FONMEN).
-  max_edge_skip: 0.18
+  #
+  # Raised 0.18 → 0.35 on 2026-07-08 after the gate switched to using
+  # Pinnacle's devigged prob (sharp global reference) instead of our
+  # internal model. The 18pp cap's whole justification was "model
+  # edges over 20pp are almost always model overconfidence" — but
+  # Pinnacle IS sharp; a 20pp gap Pinnacle vs Kalshi is a real market
+  # inefficiency, not overconfidence. 35pp still catches "one book is
+  # stale / broken quote" territory (which does happen, especially on
+  # Kalshi's thinner ATP/WTA books late-night US time).
+  max_edge_skip: 0.35
   # Stake taper on large-but-not-extreme edges. Between
   # ``taper_edge_above`` and ``max_edge_skip``, scale stake linearly
   # from full to ``taper_min_stake_frac``. Acts as Kelly-style

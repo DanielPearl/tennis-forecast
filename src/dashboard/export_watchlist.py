@@ -146,8 +146,15 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         ev_a = ev_calc(live_prob_a, market_prob_a, slip).ev_per_contract if market_prob_a is not None else None
         ev_b = ev_calc(1 - live_prob_a, 1 - market_prob_a, slip).ev_per_contract if market_prob_a is not None else None
 
+        # Signal label — use Pinnacle vs Kalshi (the same reference the
+        # buy gate now uses) so ``recommended_action`` isn't stuck at
+        # WATCH when Pinnacle disagrees strongly with Kalshi but our
+        # own model happens to sit near the market price. Falls back to
+        # the model view when Pinnacle doesn't list the match.
+        sig_prob_a = (pinnacle_prob_a if pinnacle_prob_a is not None
+                       else live_prob_a)
         sig = label_match(
-            live_prob_a, market_prob_a,
+            sig_prob_a, market_prob_a,
             volatility=0.0, injury_flag=False,
             market_overreaction=False, rules_fired=[],
         )
