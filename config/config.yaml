@@ -114,8 +114,12 @@ trading:
   #   ``min_ev`` (slippage floor), ``price_band`` (Kalshi extreme
   #   -price sanity), ``max_entry_price_cents`` (risk cap),
   #   ``max_tradable_volatility`` (in-match rule volatility), the
-  #   liquidity trio (``min_open_interest`` / ``max_spread_cents``),
+  #   spread cap (``max_spread_cents``),
   #   ``profit_lock_market_prob`` (sell rule).
+  # min_open_interest dropped 50 → 1 (2026-07-09, user request): with
+  # $1 / 1-contract test bets a deep book buys nothing, and the OI
+  # floor was blocking real edges on freshly-opened markets. The 6¢
+  # spread cap remains the junk-book filter.
   slippage_pct: 0.02
   small_edge_min: 0.04
   strong_edge_min: 0.08
@@ -125,7 +129,7 @@ trading:
   max_market_prob: 0.90
   max_entry_price_cents: 70
   max_tradable_volatility: 0.55
-  min_open_interest: 50
+  min_open_interest: 1
   max_spread_cents: 6
   # Hard cap on simultaneous open paper positions. The simulator ranks
   # every eligible row by edge × EV and opens only the top N each tick.
