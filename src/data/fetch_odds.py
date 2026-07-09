@@ -33,8 +33,8 @@ from typing import Any
 import requests
 
 from kalshi_sdk.pinnacle import (
+    benchmark_probs_by_pair_with_guest as _sdk_benchmark_with_guest,
     discover_sport_keys,
-    pinnacle_probs_by_pair as _sdk_pinnacle_probs_by_pair,
 )
 
 from ..utils.logging_setup import setup_logging
@@ -61,10 +61,20 @@ def pinnacle_probs_by_pair() -> dict[frozenset, dict[str, float]]:
     """Return a lookup mapping ``frozenset({player_a_name, player_b_name})``
     → ``{player_a_name: fair_prob_a, player_b_name: fair_prob_b}``.
 
-    Forwards to ``kalshi_sdk.pinnacle.pinnacle_probs_by_pair`` after
-    resolving the currently-active tennis sport keys.
+    Sources, in priority order:
+
+      1. Pinnacle's own public guest API (~400 tennis matchups on a
+         typical day — full ITF Futures + Challenger + tour coverage,
+         which The Odds API's tennis feed never carries).
+      2. The Odds API cascade (Pinnacle → Betfair Exchange UK / EU)
+         restricted to whatever sport keys the API currently lists
+         (usually only the active Slam).
+
+      Guest-API entries win when both sources quote the pair, because
+      the guest feed is Pinnacle's real-time line-shopper source and
+      is roughly 60s fresher than The Odds API's redistribution.
     """
-    return _sdk_pinnacle_probs_by_pair(_tennis_sport_keys())
+    return _sdk_benchmark_with_guest(_tennis_sport_keys(), guest_sport="tennis")
 
 
 def fetch_pre_match_odds() -> list[dict[str, Any]]:
