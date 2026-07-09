@@ -239,8 +239,16 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             # status is ``closed`` / ``settled`` / ``finalized``;
             # ``winner_side`` records which side prevailed (PLAYER_A /
             # PLAYER_B / None) for the dashboard's audit trail.
+            # ``expected_expiration_time`` is Kalshi's own ISO stamp
+            # for when the market is scheduled to expire; the
+            # dashboard uses it as a secondary settled-detection
+            # signal for the common case where Kalshi is slow to
+            # flip the status flag on a match that's already ended
+            # in real life.
             "completed": bool(raw.get("completed")),
             "winner_side": raw.get("winner_side"),
+            "expected_expiration_time":
+                raw.get("expected_expiration_time"),
         }
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
         # buy_gates and buy_blockers using the shared evaluator.
