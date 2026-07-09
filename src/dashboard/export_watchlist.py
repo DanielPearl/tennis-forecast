@@ -232,6 +232,15 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             # Kalshi markets API; the tennis feed already reads it
             # into ``raw`` in ``collapse_to_matches``.
             "rules_primary": raw.get("rules_primary"),
+            # Settlement flags — surfaced so the dashboard's Model-vs-
+            # market table can drop rows whose Kalshi markets have
+            # already settled (the contract is over, nothing left to
+            # trade). ``completed`` is True whenever Kalshi's market
+            # status is ``closed`` / ``settled`` / ``finalized``;
+            # ``winner_side`` records which side prevailed (PLAYER_A /
+            # PLAYER_B / None) for the dashboard's audit trail.
+            "completed": bool(raw.get("completed")),
+            "winner_side": raw.get("winner_side"),
         }
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
         # buy_gates and buy_blockers using the shared evaluator.
