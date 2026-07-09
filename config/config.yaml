@@ -88,29 +88,39 @@ model:
 # practical floor for an edge to be tradeable, not theoretical.
 # ---------------------------------------------------------------------
 trading:
-  # 695-trade paper audit (2026-07-07) showed the 5-15pp edge bucket ran
-  # -0.7% ROI across 436 opens (63% of trades) while the 15pp+ bucket ran
-  # +2-9% across the other ~250. Everything below 15pp is model noise
-  # against a slightly-more-accurate Kalshi mid — raising the floor
-  # kills the losing tail without touching the wins. The old unified
-  # 5c floor lives on for the other bots that don't have this depth
-  # of paper history yet.
+  # 2026-07-09: swept out the guardrails that were justified by "our
+  # internal model is over-confident". The bot's reference is now a
+  # cascade of PROFESSIONAL odds — Pinnacle's own line-shopper feed
+  # first, Betfair Exchange (UK / EU) as fallback — so an edge is
+  # only reported when a sharp global book disagrees with Kalshi.
+  # That reframing kills the whole "model overconfidence" premise
+  # every 2026-05 loss review kept flagging, so every threshold that
+  # was tightened for that reason gets loosened here:
+  #
+  #   * ``small_edge_min`` / ``strong_edge_min`` were calibrated
+  #     against MODEL edges (5-15pp bucket ran -0.7% ROI in the
+  #     695-trade audit); a 4-6pp Pinnacle-vs-Kalshi gap is a real
+  #     inefficiency, not noise, so the floors drop accordingly.
+  #   * ``max_edge_skip`` existed to cap the model's own runaway
+  #     over-confidence (12pp → 18pp → 35pp as the reference got
+  #     sharper); a professional-odds gap of any size is a signal,
+  #     not overconfidence, so the cap is retired outright. The
+  #     remaining "genuinely broken quote" cases stay caught by the
+  #     ``price_band`` + ``max_entry_price`` + ``spread`` gates.
+  #   * The stake taper is already gone (2026-07-08).
+  #
+  # Kept unchanged because they're general market-safety gates that
+  # never had a model-confidence justification:
+  #   ``min_ev`` (slippage floor), ``price_band`` (Kalshi extreme
+  #   -price sanity), ``max_entry_price_cents`` (risk cap),
+  #   ``max_tradable_volatility`` (in-match rule volatility), the
+  #   liquidity trio (``min_open_interest`` / ``max_spread_cents``),
+  #   ``profit_lock_market_prob`` (sell rule).
   slippage_pct: 0.02
-  # 2026-07-08 re-tune for the Pinnacle-referenced gate. The prior 15pp
-  # floor was calibrated against noisy MODEL edges (the 5-15pp bucket
-  # ran -0.7% ROI because the model was over-confident on close plays).
-  # Pinnacle is a sharp global book — a 5-8pp Pinnacle-vs-Kalshi gap is
-  # a real market inefficiency, not model noise. Dropped the floor and
-  # widened the price band accordingly.
-  small_edge_min: 0.06
-  strong_edge_min: 0.12
+  small_edge_min: 0.04
+  strong_edge_min: 0.08
   min_ev: 0.03
   require_strong_edge: false
-  # Widened from 0.25/0.75 → 0.10/0.90. The old band excluded deep-
-  # underdog trades that were expected to be model-uncalibrated; with
-  # Pinnacle as the reference, extremes are handled fine (that's where
-  # the sharpest disagreements show up — e.g. Kalshi 21% on Fritz
-  # vs Pinnacle's 39%, +18pp real edge, previously gate-blocked).
   min_market_prob: 0.10
   max_market_prob: 0.90
   max_entry_price_cents: 70
@@ -127,47 +137,16 @@ trading:
   # settlement (risk 95¢ for ≤5¢ upside), so we lock in profit and
   # recycle capital. Shared rule with darts / table-tennis.
   profit_lock_market_prob: 0.95
-  # Extreme-edge guardrail.
-  # Edges this large are usually model overconfidence (sparse Elo for
-  # qualifiers, surface miscalibration, missing real-world info the
-  # market is pricing) rather than real signal.
-  #
-  # 2026-05-19: lost 8/8 settled trades where |edge| averaged +27pp;
-  # setting this to 0.20 would have skipped 6 of those 8.
-  #
-  # 2026-05-27 calibration data on 11 settled live bets: 10-15pp
-  # bucket won 50% (predicted ~62%); 15-20pp bucket won 33%
-  # (predicted ~68%) — the strongest model picks are the worst
-  # calibrated, the classic over-confident-tail signature. Tightening
-  # the cap from 0.20 to 0.12 cuts off the 15-20pp bucket entirely;
-  # would have skipped 4 of the 6 losses (BAEBUR +15.0, NORVAL +17.1,
-  # KORWAN +17.4, plus DAVTIR +15.6) with no foregone wins (the only
-  # 15-20pp win was TEIFRE +16.8, but we'd still have 2 of 6 from the
-  # 10-15pp bucket).
-  #
-  # Raised 0.12 → 0.18 after the Platt calibration layer started
-  # blending toward observed Kalshi outcomes — the layer corrects
-  # part of the over-confidence inside the gate's window, so the
-  # 12pp ceiling was too tight (bot was sitting on 2 positions and
-  # skipping +19-23pp edges on JODZVE / FONMEN).
-  #
-  # Raised 0.18 → 0.35 on 2026-07-08 after the gate switched to using
-  # Pinnacle's devigged prob (sharp global reference) instead of our
-  # internal model. The 18pp cap's whole justification was "model
-  # edges over 20pp are almost always model overconfidence" — but
-  # Pinnacle IS sharp; a 20pp gap Pinnacle vs Kalshi is a real market
-  # inefficiency, not overconfidence. 35pp still catches "one book is
-  # stale / broken quote" territory (which does happen, especially on
-  # Kalshi's thinner ATP/WTA books late-night US time).
-  max_edge_skip: 0.35
-  # Stake taper was designed for MODEL edges — the premise was "bigger
-  # edge → more likely model overconfidence → smaller stake". Pinnacle
-  # doesn't have that inverse relationship (a wider Pinnacle-vs-Kalshi
-  # gap = more conviction, not less), so the taper is disabled on the
-  # Pinnacle-referenced gate. Keys omitted so ``stake_taper`` returns
-  # 1.0 (full stake) unconditionally.
-  # taper_edge_above: 0.08
-  # taper_min_stake_frac: 0.50
+  # 2026-07-09: ``max_edge_skip`` deliberately omitted. The whole
+  # justification for capping big edges was "our internal model is
+  # over-confident on the tail"; the reference is now a professional
+  # book so the tail is a real market inefficiency, not model noise.
+  # Broken-quote outliers still get filtered by the price_band +
+  # spread + max_entry_price gates. Historical incident references
+  # kept in the 2026-05-19 comment on the tennis simulator's stake
+  # taper for anyone re-tuning later.
+  # Stake taper (also model-only) remains disabled — keys omitted so
+  # ``stake_taper`` returns 1.0 unconditionally.
 
 # ---------------------------------------------------------------------
 # Dashboard. Stdlib http.server (no Flask dependency) — same pattern
