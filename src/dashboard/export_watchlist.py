@@ -253,15 +253,21 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         # BUY gate evaluation — sets buy_eligible, buy_score, buy_side,
         # buy_gates and buy_blockers using the shared evaluator.
         #
-        # We feed Pinnacle's devigged probability (not our internal
-        # model) as the ``live_prob_a`` the gate compares against
-        # Kalshi. Pinnacle is the sharpest global reference, so a
-        # Kalshi price that disagrees with Pinnacle is a real edge;
-        # a Kalshi price that only disagrees with our model is just
-        # our model being wrong. If Pinnacle isn't listing the match
-        # (Challenger / ITF / between-tournaments), skip the buy —
-        # trading without a sharp reference is what got us into the
-        # miscalibration hole in the first place.
+        # Reference cascade for the buy-gate's edge computation:
+        #   1. Pinnacle's devigged probability when the sharp-book
+        #      cascade quotes the match (Pinnacle guest → Betfair
+        #      Exchange UK → Betfair Exchange EU).
+        #   2. Our trained model's ``live_prob_a`` when no professional
+        #      book is quoting (deep ITF Futures, between-tournament
+        #      weeks). This used to trigger a ``no_pinnacle_reference``
+        #      blocker that hard-skipped the trade; 2026-07-10 the
+        #      user asked us to drop the safety catch and trust the
+        #      internal model on rows the sharp cascade misses, since
+        #      the whole point of adding Betfair + Pinnacle guest was
+        #      to extend coverage into the tier where Kalshi lists but
+        #      no sharp reference wants to price. The trained model
+        #      holds up on holdout (Brier 0.145) — good enough to be
+        #      a reference when nothing else is quoting.
         if pinnacle_prob_a is not None:
             # The gate uses ``live_prob_a`` to compute its edge; swap
             # in Pinnacle so the gate compares Pinnacle-vs-Kalshi. The
@@ -271,10 +277,11 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             gate_row["live_prob_a"] = pinnacle_prob_a
             decision = evaluate_buy(gate_row, cfg.get("trading") or {})
         else:
+            # Fall through to the raw model prob. Every other gate
+            # (min_ev, price_band, spread, open_interest, max_entry)
+            # still applies; only the sharp-reference requirement
+            # dropped.
             decision = evaluate_buy(row, cfg.get("trading") or {})
-            decision.eligible = False
-            decision.score = 0.0
-            decision.blockers = list(decision.blockers) + ["no_pinnacle_reference"]
         row["buy_eligible"] = bool(decision.eligible)
         row["buy_score"] = round(float(decision.score), 6)
         row["buy_side"] = decision.side
