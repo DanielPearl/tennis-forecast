@@ -37,17 +37,20 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
     row_with_ev = dict(row)
     row_with_ev.setdefault("__ev_module", "trading.ev")
     # strong_edge_min / require_strong_edge were retired 2026-07-11
-    # when the two-tier taxonomy collapsed to a single EDGE label.
-    # Fall the SDK's ``strong_edge_min`` param back to the same
-    # ``small_edge_min`` value + hard-code ``require_strong_edge=False``
-    # so the SDK still runs but the branch never fires. Kept a single
-    # SDK signature rather than adding a config-schema migration.
+    # when the two-tier taxonomy collapsed to a single EDGE label
+    # (see ``signals.py``). Feed the SDK the same ``small_edge_min``
+    # for both floors + hard-code ``require_strong_edge=False`` so the
+    # strong branch never fires, and pass ``tradeable_labels={"EDGE"}``
+    # explicitly — the SDK's default is still {STRONG_EDGE, SMALL_EDGE,
+    # MARKET_OVERREACTION}, which the tennis signals no longer emit,
+    # so without this override every row's ``label`` gate fails.
     _sm = float(trading_cfg.get("small_edge_min", 0.05))
     result = evaluate_row_gates(
         row_with_ev,
         small_edge_min=_sm,
         strong_edge_min=_sm,
         require_strong_edge=False,
+        tradeable_labels={"EDGE"},
         min_ev=float(trading_cfg.get("min_ev", 0.03)),
         min_market_prob=float(trading_cfg.get("min_market_prob", 0.0)),
         max_market_prob=float(trading_cfg.get("max_market_prob", 1.0)),
