@@ -79,6 +79,46 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
             gates["max_edge_skip"] = False
         else:
             gates["max_edge_skip"] = True
+    # Spread-aware true-edge gate. The SDK computes side_edge as
+    # ``|live_prob_a − market_prob_a|`` and uses ``(1 − market_a)`` as
+    # the reference market for side==B. That assumes yes_ask_a +
+    # yes_ask_b == 100¢, which Kalshi tennis books rarely satisfy —
+    # 6-10¢ spreads are routine. When the two asks sum > 100¢, the
+    # SDK's edge is inflated by the spread, and the executor buys at
+    # a price that's actually near-neutral to our model.
+    #
+    # Example (2026-07-11 Bueno vs Marcondes):
+    #   live_a=50.9%, market_a (Bueno YES ask)=61¢,
+    #   yes_ask_cents_b (Marcondes YES ask)=48¢ → book totals 109¢.
+    #   SDK: side_edge = |0.509 − 0.61| = 10.1pp → clears 9pp gate.
+    #   True: model_b (49.1%) − market_b_ask (48¢) = +1.1pp.
+    #
+    # Recompute with the actual yes-ask on the side we'd buy. If it
+    # falls below the small_edge floor, mark the row ineligible and
+    # emit ``spread_inflated_edge`` as a blocker so the audit trail
+    # names the reason.
+    if eligible and result.side in ("A", "B"):
+        _side_key = "yes_ask_cents_a" if result.side == "A" \
+            else "yes_ask_cents_b"
+        _side_ask_c = row_with_ev.get(_side_key)
+        _live_a_p = row_with_ev.get("live_prob_a")
+        if _side_ask_c is not None and _live_a_p is not None:
+            _live_a_p = float(_live_a_p)
+            _side_model = _live_a_p if result.side == "A" \
+                else (1.0 - _live_a_p)
+            _true_market = float(_side_ask_c) / 100.0
+            _true_edge = _side_model - _true_market
+            if _true_edge < _sm:
+                eligible = False
+                blockers.append(
+                    f"spread_inflated_edge_true"
+                    f"{_true_edge*100:+.1f}pp"
+                    f"<{_sm*100:.0f}pp_floor"
+                    f"_(sdk_saw_{float(result.side_edge)*100:+.1f}pp)"
+                )
+                gates["true_edge"] = False
+            else:
+                gates["true_edge"] = True
     return BuyDecision(
         eligible=eligible,
         score=result.score,
