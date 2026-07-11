@@ -214,6 +214,14 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "spread_cents": raw.get("spread_cents"),
             "yes_ask_cents_a": raw.get("yes_ask_cents_a"),
             "yes_ask_cents_b": raw.get("yes_ask_cents_b"),
+            # Per-side Kalshi market tickers — the live executor uses
+            # these to identify the exact market to place the order
+            # against. Without them, ``_maybe_place`` silently returns
+            # on every row (the ``if not ticker: return`` guard). Not
+            # rendered by the dashboard directly but part of the
+            # contract between this export and the trading loop.
+            "ticker_a": raw.get("ticker_a"),
+            "ticker_b": raw.get("ticker_b"),
             # Kalshi-published contract titles — both sides carried
             # through so the simulator can stamp the right one on the
             # position record at open time, and the watchlist's Title
