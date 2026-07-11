@@ -9,14 +9,14 @@ Labels (in priority order — the first match wins):
 
   INJURY_RISK         injury_news_flag is True
   AVOID_VOLATILE      volatility_score above the configured cap
-  STRONG_EDGE         |edge| >= strong_edge_min
-                      (with an ``overreaction`` note in the reason
-                       string when the live model flagged one — this
-                       used to be a distinct MARKET_OVERREACTION
-                       label but the 2026-07-07 audit showed it
-                       tracked STRONG_EDGE's ROI exactly, so we fold
-                       it in rather than pretend it's discriminating)
-  SMALL_EDGE          |edge| >= small_edge_min
+  EDGE                |edge| >= small_edge_min
+                      (STRONG_EDGE + SMALL_EDGE were collapsed
+                       2026-07-11 — see config.yaml. MARKET_OVERREACTION
+                       was folded in 2026-07-07 for the same reason: the
+                       audit showed distinct labels tracked identical
+                       ROI. The overreaction flag is still preserved
+                       on the row and appended to the ``reason`` string
+                       when it fires.)
   WATCH               match is interesting (Elo within 100, named tournament)
                       but no actionable edge
   NO_TRADE            default
@@ -41,7 +41,7 @@ class SignalResult:
 
 _PRIORITY = [
     "INJURY_RISK", "AVOID_VOLATILE",
-    "STRONG_EDGE", "SMALL_EDGE", "WATCH", "NO_TRADE",
+    "EDGE", "WATCH", "NO_TRADE",
 ]
 
 
@@ -120,16 +120,9 @@ def label_match(model_prob_a: float, market_prob_a: float | None,
         overreact_note = " (overreaction: "
         overreact_note += "; ".join(rules_fired) if rules_fired else "market move outpaces model adjustment"
         overreact_note += ")"
-    if edge_abs >= t["strong_edge_min"]:
-        return SignalResult(
-            label="STRONG_EDGE",
-            reason=f"model {edge_signed*100:+.1f}pp vs market on {side}"
-                    + overreact_note,
-            confidence_score=_confidence(model_prob_a, volatility),
-        )
     if edge_abs >= t["small_edge_min"]:
         return SignalResult(
-            label="SMALL_EDGE",
+            label="EDGE",
             reason=f"model {edge_signed*100:+.1f}pp vs market on {side}"
                     + overreact_note,
             confidence_score=_confidence(model_prob_a, volatility),

@@ -93,38 +93,33 @@ trading:
   # cascade of PROFESSIONAL odds — Pinnacle's own line-shopper feed
   # first, Betfair Exchange (UK / EU) as fallback — so an edge is
   # only reported when a sharp global book disagrees with Kalshi.
-  # That reframing kills the whole "model overconfidence" premise
-  # every 2026-05 loss review kept flagging, so every threshold that
-  # was tightened for that reason gets loosened here:
   #
-  #   * ``small_edge_min`` / ``strong_edge_min`` were calibrated
-  #     against MODEL edges (5-15pp bucket ran -0.7% ROI in the
-  #     695-trade audit); a 4-6pp Pinnacle-vs-Kalshi gap is a real
-  #     inefficiency, not noise, so the floors drop accordingly.
-  #   * ``max_edge_skip`` existed to cap the model's own runaway
-  #     over-confidence (12pp → 18pp → 35pp as the reference got
-  #     sharper); a professional-odds gap of any size is a signal,
-  #     not overconfidence, so the cap is retired outright. The
-  #     remaining "genuinely broken quote" cases stay caught by the
-  #     ``price_band`` + ``max_entry_price`` + ``spread`` gates.
-  #   * The stake taper is already gone (2026-07-08).
+  # 2026-07-11 sweep: collapsed the two-tier STRONG_EDGE / SMALL_EDGE
+  # taxonomy into a single ``small_edge_min`` floor at 9pp, matching
+  # both dashboard executor gates (SIM + LIVE). Two motivations —
+  # (a) the 695-trade audit showed the 4-8pp cohort ran effectively
+  # flat once fees + spread were paid, so the low floor was churning
+  # capital for no ROI; (b) three different thresholds (4pp watchlist
+  # / 9pp SIM executor / 15pp LIVE executor) meant rows kept
+  # showing as buy_eligible in the watchlist but silently getting
+  # rejected downstream. One number everywhere is the whole point.
+  # ``strong_edge_min`` + ``require_strong_edge`` retired with it —
+  # dead code once the classifier collapsed to a single EDGE label.
   #
   # Kept unchanged because they're general market-safety gates that
   # never had a model-confidence justification:
   #   ``min_ev`` (slippage floor), ``price_band`` (Kalshi extreme
   #   -price sanity), ``max_entry_price_cents`` (risk cap),
-  #   ``max_tradable_volatility`` (in-match rule volatility), the
-  #   spread cap (``max_spread_cents``),
+  #   ``max_tradable_volatility`` (in-match rule volatility),
+  #   the spread cap (``max_spread_cents``),
   #   ``profit_lock_market_prob`` (sell rule).
   # min_open_interest dropped 50 → 1 (2026-07-09, user request): with
   # $1 / 1-contract test bets a deep book buys nothing, and the OI
   # floor was blocking real edges on freshly-opened markets. The 6¢
   # spread cap remains the junk-book filter.
   slippage_pct: 0.02
-  small_edge_min: 0.04
-  strong_edge_min: 0.08
+  small_edge_min: 0.09
   min_ev: 0.03
-  require_strong_edge: false
   min_market_prob: 0.10
   max_market_prob: 0.90
   max_entry_price_cents: 70

@@ -3,8 +3,10 @@
 Mirrors the dry-run paper-trading the rest of the Kalshi suite uses:
 
   * Open a $1 paper position when a watchlist row's signal label is
-    STRONG_EDGE / SMALL_EDGE / MARKET_OVERREACTION and there's no open
-    position on that match yet.
+    EDGE and there's no open position on that match yet. (Pre-
+    2026-07-11 code split this across STRONG_EDGE / SMALL_EDGE /
+    MARKET_OVERREACTION; those labels collapsed into one, see
+    ``signals.py``.)
   * Mark each open position to the current market price every tick;
     surfaces the unrealized P&L on the dashboard live.
   * When Kalshi marks a match closed (the live monitor sets
@@ -47,7 +49,7 @@ log = setup_logging("trading.simulator")
 
 
 # Signal labels that trigger an open. Everything else is monitor-only.
-_TRADEABLE_LABELS = {"STRONG_EDGE", "SMALL_EDGE"}
+_TRADEABLE_LABELS = {"EDGE"}
 # After a settle, brief cooldown before re-opening on the same match_id.
 # Recycled matches get fresh ids (see ``match_progression._replace_completed``)
 # so this only blocks pathological flapping inside a single tick window —

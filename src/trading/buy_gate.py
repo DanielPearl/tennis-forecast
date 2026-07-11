@@ -36,12 +36,18 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
     """Apply the standard BUY gate to one watchlist row."""
     row_with_ev = dict(row)
     row_with_ev.setdefault("__ev_module", "trading.ev")
+    # strong_edge_min / require_strong_edge were retired 2026-07-11
+    # when the two-tier taxonomy collapsed to a single EDGE label.
+    # Fall the SDK's ``strong_edge_min`` param back to the same
+    # ``small_edge_min`` value + hard-code ``require_strong_edge=False``
+    # so the SDK still runs but the branch never fires. Kept a single
+    # SDK signature rather than adding a config-schema migration.
+    _sm = float(trading_cfg.get("small_edge_min", 0.05))
     result = evaluate_row_gates(
         row_with_ev,
-        small_edge_min=float(trading_cfg.get("small_edge_min", 0.05)),
-        strong_edge_min=float(trading_cfg.get("strong_edge_min",
-                                              trading_cfg.get("small_edge_min", 0.05))),
-        require_strong_edge=bool(trading_cfg.get("require_strong_edge", False)),
+        small_edge_min=_sm,
+        strong_edge_min=_sm,
+        require_strong_edge=False,
         min_ev=float(trading_cfg.get("min_ev", 0.03)),
         min_market_prob=float(trading_cfg.get("min_market_prob", 0.0)),
         max_market_prob=float(trading_cfg.get("max_market_prob", 1.0)),

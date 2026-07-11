@@ -357,8 +357,6 @@ def _write_effective_config(cfg: dict[str, Any], json_path: Path) -> None:
                     "always skipped with a ``no_pinnacle_reference`` "
                     "blocker."
                 ),
-                "strong_edge_min": float(t.get("strong_edge_min",
-                                                 t.get("small_edge_min", 0.05))),
                 "max_edge_skip": t.get("max_edge_skip"),
                 "taper_edge_above": t.get("taper_edge_above"),
                 "taper_min_stake_frac": t.get("taper_min_stake_frac"),
