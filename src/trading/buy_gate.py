@@ -119,6 +119,24 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
                 gates["true_edge"] = False
             else:
                 gates["true_edge"] = True
+    # Pinnacle-required gate: refuse to flag a row eligible when the
+    # sharp benchmark line isn't quoting the match. Without this, the
+    # internal Sackmann-trained model's ~50% fallback for unlisted
+    # fixtures would still clear the edge floor against deep-underdog
+    # Kalshi asks and stamp buy_eligible=True. The dashboard executor
+    # already enforces the same rule (SportLiveExecutor.require_pinn-
+    # acle) so trading is safe today; this gate keeps the watchlist's
+    # Verdict cell honest — no-Pinnacle rows now read SKIP with a
+    # ``no_pinnacle_line`` blocker rather than eligible-but-untradable.
+    # Defaults to True; set trading.require_pinnacle: false in config
+    # to opt back into the internal-model fallback.
+    if eligible and bool(trading_cfg.get("require_pinnacle", True)):
+        if row_with_ev.get("pinnacle_prob_a") is None:
+            eligible = False
+            blockers.append("no_pinnacle_line")
+            gates["pinnacle"] = False
+        else:
+            gates["pinnacle"] = True
     return BuyDecision(
         eligible=eligible,
         score=result.score,
