@@ -354,6 +354,7 @@ def collapse_to_matches(markets: list[dict],
             "yes_ask_cents_a": _ask_cents(a_market, "yes"),
             "yes_ask_cents_b": (_ask_cents(b_market, "yes") if b_market else None),
             "volume_a": _volume(a_market),
+            "volume_b": (_volume(b_market) if b_market else None),
             "open_interest_a": _open_interest(a_market),
             "spread_cents": _spread_cents(a_market),
             # Kalshi-published market titles for both sides — surface
