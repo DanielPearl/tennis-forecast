@@ -122,7 +122,7 @@ trading:
   min_ev: 0.03
   min_market_prob: 0.10
   max_market_prob: 0.90
-  max_entry_price_cents: 70
+  max_entry_price_cents: 60  # 30-60¢ band per 2026-07-13 audit — in lockstep with dashboard tennis_trader live block
   max_tradable_volatility: 0.55
   min_open_interest: 1
   max_spread_cents: 6
