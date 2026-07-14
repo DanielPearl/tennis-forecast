@@ -285,6 +285,35 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             gate_row = dict(row)
             gate_row["live_prob_a"] = pinnacle_prob_a
             decision = evaluate_buy(gate_row, cfg.get("trading") or {})
+            # Model-confirmation veto (2026-07-14 audit). The sharp
+            # cascade sometimes prices deep ITF/qualifier matches our
+            # trained model reads as coin flips (49-51%): on 07-14 the
+            # bot bought 10 such matches on 9-12pp "Pinnacle edges"
+            # while its own model saw <1pp — the dashboard then shows
+            # a Model% ≈ entry% row the user rightly flags as a bet
+            # that should never have been made. A real edge should be
+            # visible from BOTH references: require the raw model to
+            # independently clear the same floor on the same side.
+            _t = cfg.get("trading") or {}
+            _floor = float(_t.get("min_raw_model_edge",
+                                   _t.get("small_edge_min", 0.09)))
+            if (decision.eligible and decision.side in ("A", "B")
+                    and live_prob_a is not None):
+                _ask_c = row.get("yes_ask_cents_a" if decision.side == "A"
+                                  else "yes_ask_cents_b")
+                _model_side = (float(live_prob_a) if decision.side == "A"
+                                else 1.0 - float(live_prob_a))
+                _model_edge = ((_model_side - float(_ask_c) / 100.0)
+                                if _ask_c is not None else None)
+                if _model_edge is None or _model_edge < _floor:
+                    decision.eligible = False
+                    decision.blockers = list(decision.blockers) + [
+                        "model_not_confirming_"
+                        + ("no_ask" if _model_edge is None else
+                           f"{_model_edge*100:+.1f}pp<{_floor*100:.0f}pp")
+                    ]
+                    decision.gates = dict(decision.gates,
+                                           model_confirms=False)
         else:
             # Fall through to the raw model prob. Every other gate
             # (min_ev, price_band, spread, open_interest, max_entry)
