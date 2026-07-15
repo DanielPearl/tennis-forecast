@@ -125,13 +125,13 @@ trading:
   max_entry_price_cents: 70  # 30-70¢ band (restored 2026-07-15 per user) — in lockstep with dashboard tennis_trader live block
   max_tradable_volatility: 0.55
   min_open_interest: 1
-  # 2026-07-15: raised 6 → 10 after Rinderknech vs Tabur (+12.5pp
-  # Pinnacle edge on a 770K-OI ATP market) was blocked by a 12¢ book.
-  # Tour-level tennis routinely runs 8-12¢ spreads and the 6¢ cap was
-  # catching liquid markets that we'd hold to settlement (spread
-  # matters less when we're not exiting at mid). 25¢+ junk books
-  # (Fumagalli case) still filtered.
-  max_spread_cents: 10
+  # 2026-07-15 (updated): user asked to remove the 6¢ cap COMPLETELY
+  # from every bot. Setting to null retires the spread gate — the
+  # kalshi_sdk validator treats None as "gate disabled", so no row
+  # gets rejected on spread anymore. Wide-book garbage still gets
+  # filtered by the true-edge gate (a 25¢ spread makes both asks
+  # so overpriced that neither side clears the 9pp edge floor).
+  max_spread_cents: null
   # Hard cap on simultaneous open paper positions. The simulator ranks
   # every eligible row by edge × EV and opens only the top N each tick.
   max_open_positions: 10
