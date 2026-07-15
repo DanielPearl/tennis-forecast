@@ -118,13 +118,25 @@ trading:
   # floor was blocking real edges on freshly-opened markets. The 6¢
   # spread cap remains the junk-book filter.
   slippage_pct: 0.02
-  small_edge_min: 0.09
-  min_ev: 0.03
-  min_market_prob: 0.10
-  max_market_prob: 0.90
-  max_entry_price_cents: 70  # 30-70¢ band (restored 2026-07-15 per user) — in lockstep with dashboard tennis_trader live block
-  max_tradable_volatility: 0.55
-  min_open_interest: 1
+  # Simplified gate stack 2026-07-15 (user directive):
+  #   * small_edge_min 0.09 → 0.05 — fee-adjusted breakeven is
+  #     ~1pp, so 5pp true edge = 4pp+ net EV. 9pp was arbitrary /
+  #     calibrated to compensate for the SDK's spread-inflated
+  #     denominator, which the true-edge post-check already fixes.
+  #   * min_ev retired — inert given the true-edge check (any 5pp
+  #     true edge always clears 3pp EV).
+  #   * price band [10-90%] → [5-95%] — real strong-edge deep
+  #     underdogs (Berrut class) were being over-filtered.
+  #   * max_tradable_volatility retired — in-match feed was removed
+  #     2026-07-08; score always 0.0 so the gate was dead code.
+  #   * min_open_interest 1 → 10 — the 1-contract floor didn't
+  #     filter anything; 10 is a reasonable "fillable book" bar.
+  #   * max_spread_cents already null (2026-07-15 sweep).
+  small_edge_min: 0.05
+  min_market_prob: 0.05
+  max_market_prob: 0.95
+  max_entry_price_cents: 70
+  min_open_interest: 10
   # 2026-07-15 (updated): user asked to remove the 6¢ cap COMPLETELY
   # from every bot. Setting to null retires the spread gate — the
   # kalshi_sdk validator treats None as "gate disabled", so no row

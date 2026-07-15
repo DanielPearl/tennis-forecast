@@ -92,8 +92,13 @@ def label_match(model_prob_a: float, market_prob_a: float | None,
     # overreaction flag is preserved on the row and appended to the
     # reason string when it fires.)
 
-    # 2) Volatility cap.
-    if volatility >= t["max_tradable_volatility"]:
+    # 2) Volatility cap. Retired 2026-07-15 as dead code — the
+    # in-match feed that produced ``volatility`` was removed 07-08 so
+    # the score is always 0.0. Kept as a defensive tolerance if
+    # someone re-adds the feed and configures the key: fires only
+    # when both a nonzero score AND a config threshold exist.
+    _vol_cap = t.get("max_tradable_volatility")
+    if _vol_cap is not None and volatility >= float(_vol_cap):
         return SignalResult(
             label="AVOID_VOLATILE",
             reason="volatility above tradeable cap — wait for the set to settle",
