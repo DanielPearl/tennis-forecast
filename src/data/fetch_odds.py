@@ -50,11 +50,20 @@ def _api_key() -> str:
 
 
 def _tennis_sport_keys() -> list[str]:
-    """Discover every currently-active tennis sport key on The Odds
-    API. Thin wrapper over ``kalshi_sdk.pinnacle.discover_sport_keys``
-    that pins the ``tennis_`` prefix; kept for backward compat with
-    other callers in the tennis repo."""
-    return discover_sport_keys("tennis_")
+    """Currently-active MAIN-TOUR singles keys on The Odds API.
+
+    Each key costs one paid /odds call per cache window, and slam
+    weeks fan discovery out to many keys at once (qualifying, doubles,
+    both tours). The paid cascade only exists to add Betfair as a
+    second source on top of the free Pinnacle guest feed — main-tour
+    singles is where that adds value, so filter to it and bound the
+    fan-out (2026-07 credit-preservation pass).
+    """
+    keys = [k for k in discover_sport_keys("tennis_")
+            if k.startswith(("tennis_atp_", "tennis_wta_"))
+            and not any(x in k for x in ("doubles", "challenger",
+                                          "itf", "utr"))]
+    return keys[:8]
 
 
 def pinnacle_probs_by_pair() -> dict[frozenset, dict[str, float]]:
