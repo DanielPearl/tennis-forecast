@@ -30,11 +30,19 @@ def ev(model_prob: float, market_prob: float, slippage: float) -> EVResult:
     (0.02 default in config) and applied as a fixed cost on top of
     the price; the breakeven probability becomes ``market_prob + slippage``.
     """
+    import math
     raw_edge = float(model_prob) - float(market_prob)
-    breakeven = float(market_prob) + float(slippage)
-    # EV per $1 staked: model_p * (1 - market_p - slippage) - (1 - model_p) * (market_p + slippage)
+    # Kalshi entry fee: ceil(0.07 x p x (1-p)) to the cent — a real
+    # cash cost at open (settlement is fee-free). Added 2026-07-20 EV
+    # audit so the gate EV matches the dashboard's net-of-fee figure.
+    fee = (math.ceil(7.0 * market_prob * (1.0 - market_prob)) / 100.0
+           if 0.0 < market_prob < 1.0 else 0.0)
+    breakeven = float(market_prob) + float(slippage) + fee
+    # EV per $1 staked, slippage as a fixed price haircut, fee charged
+    # up front regardless of outcome.
     payout_if_win = 1.0 - market_prob - slippage
     payout_if_loss = -(market_prob + slippage)
-    ev_per = model_prob * payout_if_win + (1.0 - model_prob) * payout_if_loss
+    ev_per = (model_prob * payout_if_win
+              + (1.0 - model_prob) * payout_if_loss) - fee
     return EVResult(edge=raw_edge, ev_per_contract=ev_per,
                     breakeven_market_prob=breakeven)
