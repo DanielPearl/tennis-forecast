@@ -55,7 +55,9 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
         strong_edge_min=_sm,
         require_strong_edge=False,
         tradeable_labels={"EDGE"},
-        min_ev=float(trading_cfg.get("min_ev", 0.03)),
+        # EV gate retired 2026-07-21 (redundant: the 9pp edge floor
+        # inside the 30-70c band guarantees positive net EV).
+        min_ev=0.0,
         min_market_prob=max(
             float(trading_cfg.get("min_market_prob", 0.0)),
             _bc.MIN_ENTRY_PRICE),
@@ -63,8 +65,10 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
             float(trading_cfg.get("max_market_prob", 1.0)),
             _bc.MAX_ENTRY_PRICE),
         max_tradable_volatility=float(trading_cfg.get("max_tradable_volatility", 1.0)),
-        min_open_interest=trading_cfg.get("min_open_interest"),
-        max_spread_cents=trading_cfg.get("max_spread_cents"),
+        # Spread cap + OI floor retired 2026-07-21 (see
+        # kalshi_sdk.buy_criteria).
+        min_open_interest=None,
+        max_spread_cents=None,
         max_entry_price_cents=min(
             int(trading_cfg.get("max_entry_price_cents") or 100),
             int(_bc.MAX_ENTRY_PRICE * 100)),
