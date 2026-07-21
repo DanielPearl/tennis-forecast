@@ -133,8 +133,8 @@ trading:
   #     filter anything; 10 is a reasonable "fillable book" bar.
   #   * max_spread_cents already null (2026-07-15 sweep).
   small_edge_min: 0.05
-  min_market_prob: 0.05
-  max_market_prob: 0.95
+  min_market_prob: 0.30  # canonical band — kalshi_sdk.buy_criteria (code clamps anyway)
+  max_market_prob: 0.70  # canonical band — kalshi_sdk.buy_criteria (code clamps anyway)
   max_entry_price_cents: 70
   min_open_interest: 10
   # 2026-07-15 (updated): user asked to remove the 6¢ cap COMPLETELY

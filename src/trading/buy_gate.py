@@ -44,7 +44,11 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
     # explicitly — the SDK's default is still {STRONG_EDGE, SMALL_EDGE,
     # MARKET_OVERREACTION}, which the tennis signals no longer emit,
     # so without this override every row's ``label`` gate fails.
-    _sm = float(trading_cfg.get("small_edge_min", 0.05))
+    from kalshi_sdk import buy_criteria as _bc
+    # Shared-criteria clamp (user 2026-07-21): config may only
+    # tighten the canonical gates in kalshi_sdk.buy_criteria.
+    _sm = max(float(trading_cfg.get("small_edge_min", 0.05)),
+              _bc.MIN_EDGE)
     result = evaluate_row_gates(
         row_with_ev,
         small_edge_min=_sm,
@@ -52,12 +56,18 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
         require_strong_edge=False,
         tradeable_labels={"EDGE"},
         min_ev=float(trading_cfg.get("min_ev", 0.03)),
-        min_market_prob=float(trading_cfg.get("min_market_prob", 0.0)),
-        max_market_prob=float(trading_cfg.get("max_market_prob", 1.0)),
+        min_market_prob=max(
+            float(trading_cfg.get("min_market_prob", 0.0)),
+            _bc.MIN_ENTRY_PRICE),
+        max_market_prob=min(
+            float(trading_cfg.get("max_market_prob", 1.0)),
+            _bc.MAX_ENTRY_PRICE),
         max_tradable_volatility=float(trading_cfg.get("max_tradable_volatility", 1.0)),
         min_open_interest=trading_cfg.get("min_open_interest"),
         max_spread_cents=trading_cfg.get("max_spread_cents"),
-        max_entry_price_cents=trading_cfg.get("max_entry_price_cents"),
+        max_entry_price_cents=min(
+            int(trading_cfg.get("max_entry_price_cents") or 100),
+            int(_bc.MAX_ENTRY_PRICE * 100)),
         slippage_pct=float(trading_cfg.get("slippage_pct", 0.02)),
     )
     eligible = result.eligible
@@ -68,7 +78,13 @@ def evaluate(row: dict[str, Any], trading_cfg: dict[str, Any]) -> BuyDecision:
     # model overconfidence — sparse Elo on qualifiers, surface
     # miscalibration, or the market pricing real-world info the
     # historical match panel lacks. Skip the trade entirely.
+    # Uniform suspect-edge ceiling (user 2026-07-21: same criteria
+    # for every bot) — the old "deliberately omitted" tennis exemption
+    # is retired; a >15pp gap vs the sharp line is a data problem,
+    # not a trade.
     max_edge_skip = trading_cfg.get("max_edge_skip")
+    if max_edge_skip is None:
+        max_edge_skip = _bc.MAX_EDGE
     if max_edge_skip is not None and result.side_edge is not None:
         if abs(float(result.side_edge)) > float(max_edge_skip):
             eligible = False
