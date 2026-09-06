@@ -43,6 +43,12 @@ _FUZZY_CUTOFF = 0.90
 # Populated by _rebuild_name_index() on each artifact load.
 _NAME_INDEX: dict[str, str] = {}
 _UNRESOLVED_LOGGED: set[str] = set()
+# Resolution memo (hits AND misses). The fuzzy fallback runs
+# difflib.get_close_matches over the whole index — for a slate with
+# ~50 unindexed ITF qualifiers that was ~50 full scans per tick,
+# every tick, forever (a third of a droplet core). Cleared alongside
+# _UNRESOLVED_LOGGED whenever a fresh Elo state rebuilds the index.
+_RESOLVE_CACHE: dict[str, str] = {}
 
 
 def _strip_diacritics(s: str) -> str:
@@ -62,7 +68,7 @@ def _rebuild_name_index(elo_state: EloState) -> None:
     """Refresh the normalized→canonical name map. Called from
     _ensure_loaded whenever a fresh Elo state is loaded from disk.
     First entry per key wins so ties resolve deterministically."""
-    global _NAME_INDEX, _UNRESOLVED_LOGGED
+    global _NAME_INDEX, _UNRESOLVED_LOGGED, _RESOLVE_CACHE
     idx: dict[str, str] = {}
     for canonical in elo_state.overall.keys():
         key = _norm(canonical)
@@ -70,6 +76,7 @@ def _rebuild_name_index(elo_state: EloState) -> None:
             idx[key] = canonical
     _NAME_INDEX = idx
     _UNRESOLVED_LOGGED = set()
+    _RESOLVE_CACHE = {}
 
 
 def _resolve_name(name: str) -> str:
@@ -85,6 +92,9 @@ def _resolve_name(name: str) -> str:
     hit = _NAME_INDEX.get(n)
     if hit is not None:
         return hit
+    cached = _RESOLVE_CACHE.get(n)
+    if cached is not None:
+        return cached
     # Fuzzy fallback — kept conservative so we don't collapse two
     # different players into one. 0.90 catches Soonwoo Kwon → Soon Woo
     # Kwon but rejects looser matches.
@@ -92,7 +102,8 @@ def _resolve_name(name: str) -> str:
         n, _NAME_INDEX.keys(), n=1, cutoff=_FUZZY_CUTOFF,
     )
     if candidates:
-        return _NAME_INDEX[candidates[0]]
+        _RESOLVE_CACHE[n] = _NAME_INDEX[candidates[0]]
+        return _RESOLVE_CACHE[n]
     # Nothing resolved — log ONCE per name so we don't spam every
     # tick. Falling back to the input means downstream lookups miss
     # and the feature values default to their neutral priors.
@@ -102,6 +113,10 @@ def _resolve_name(name: str) -> str:
                      "prediction will use default features",
                      name)
         _UNRESOLVED_LOGGED.add(name)
+    # Cache the miss too — every downstream lookup on an unresolved
+    # name defaults to neutral priors regardless, and re-running the
+    # fuzzy scan for the same player each tick was the actual cost.
+    _RESOLVE_CACHE[n] = name
     return name
 
 
