@@ -266,8 +266,23 @@ def collapse_to_matches(markets: list[dict],
         a_title = _parse_title(a_market.get("title", ""))
         b_title = (_parse_title(b_market.get("title", ""))
                     if b_market else {})
-        player_a = a_title.get("player") or (a_market.get("ticker") or "").split("-")[-1]
-        player_b = b_title.get("player") or ""
+        # Kalshi changed the head-to-head title format (2026-08):
+        # "Will X win the A vs B: Round" became a bare "X wins",
+        # so _TITLE_RE no longer matches and the old fallback
+        # yielded the ticker's 3-letter code ("DAR") as the player
+        # name. That breaks benchmark matching outright — a code
+        # never matches a sportsbook's "Luciano Darderi" — so every
+        # row came back un-benchmarked, and watchlist_panel hides
+        # un-benchmarked rows from Model-vs-market. yes_sub_title
+        # carries the clean name in BOTH formats; prefer it, and
+        # keep the regex path first so nothing regresses if the
+        # old titles come back.
+        player_a = (a_title.get("player")
+                    or (a_market.get("yes_sub_title") or "").strip()
+                    or (a_market.get("ticker") or "").split("-")[-1])
+        player_b = (b_title.get("player")
+                    or ((b_market or {}).get("yes_sub_title") or "").strip()
+                    or "")
         if not player_b and b_market is None:
             # Single-sided event (shouldn't happen for tennis but handle
             # gracefully) — derive opponent from the matchup last-names.
