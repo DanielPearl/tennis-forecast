@@ -132,8 +132,24 @@ def _load_state() -> dict[str, Any]:
 def _save_state(state: dict[str, Any]) -> None:
     fp = _state_path()
     fp.parent.mkdir(parents=True, exist_ok=True)
-    with open(fp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, default=str)
+    # Atomic write — unique tmp + rename. The sim AND live dashboard
+    # services run this bot against the same repo; a truncate-in-place
+    # write let the other process (or a page render) read a partial
+    # file mid-write, which blanked the watchlist for a whole tick
+    # (2026-09-07: "126 matches / 0 watchlist rows").
+    import os as _os, tempfile as _tempfile
+    _fd, _tmp = _tempfile.mkstemp(dir=str(fp.parent),
+                                   prefix=f".{fp.name}-", suffix=".tmp")
+    try:
+        with _os.fdopen(_fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=str)
+        _os.replace(_tmp, fp)
+    except Exception:
+        try:
+            _os.unlink(_tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _payout_if_win(market_prob_for_side: float, slippage: float, stake: float
