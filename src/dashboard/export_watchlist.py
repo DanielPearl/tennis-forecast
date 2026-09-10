@@ -23,6 +23,8 @@ from typing import Any
 
 import pandas as pd
 
+from kalshi_sdk.pinnacle import pick_pair_entry
+
 from ..data.fetch_live_scores import load_live_state
 from ..data.fetch_odds import pinnacle_probs_by_pair
 from ..models.predict import safe_predict
@@ -43,6 +45,29 @@ def _format_score(rec: dict[str, Any]) -> str:
 
 def _round_label(level: str, round_: str) -> str:
     return f"{level} / {round_}" if round_ else level
+
+
+_MONTHS = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+           "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12}
+
+
+def _ticker_date_anchor(ticker: str | None) -> str | None:
+    """Noon-UTC ISO anchor from a Kalshi tennis ticker's embedded date
+    (``KXATPMATCH-26SEP11ZVEKHA-KHA`` → ``2026-09-11T12:00:00Z``).
+    Used to pick the right same-pair benchmark entry when a pair has
+    lines on more than one day."""
+    if not ticker:
+        return None
+    try:
+        body = ticker.split("-")[1]
+        yy = int(body[:2])
+        mon = _MONTHS.get(body[2:5])
+        dd = int(body[5:7])
+        if mon is None:
+            return None
+        return f"20{yy:02d}-{mon:02d}-{dd:02d}T12:00:00Z"
+    except (IndexError, ValueError):
+        return None
 
 
 def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
@@ -109,6 +134,7 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
         # API spells a name slightly differently than Kalshi).
         pinnacle_prob_a = None
         pinnacle_prob_b = None
+        bench_start = None
         pair_key = frozenset({rec["player_a"], rec["player_b"]})
         pinn_map = pinnacle_lookup.get(pair_key)
         if pinn_map is None and rec["player_a"] and rec["player_b"]:
@@ -124,16 +150,33 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
                 if la in lnames and lb in lnames:
                     pinn_map = probs
                     break
+        # Same-pair-different-day guard (2026-09-10, ported from the
+        # basketball fix): a pair with lines on more than one day keeps
+        # every game as ``_alts``; anchor on the Kalshi ticker's own
+        # date so tonight's line never prices tomorrow's contract.
+        # 24h window: any start inside the contract's local day passes,
+        # a next-evening rematch (≥30h from the noon anchor) does not.
+        _anchor = _ticker_date_anchor(raw.get("ticker_a"))
+        if pinn_map is not None and _anchor is not None:
+            pinn_map = pick_pair_entry(pinn_map, _anchor,
+                                       max_delta_hours=24.0)
         if pinn_map is not None:
+            bench_start = pinn_map.get("_start")
             # Now pick out which pinn_map entry is player_a's prob.
-            # Try exact first, then loose last-name match.
+            # Try exact first, then loose last-name match. Meta keys
+            # ("_source" / "_start" / "_alts") are not player names —
+            # skip them in both passes.
             for name, prob in pinn_map.items():
+                if name.startswith("_"):
+                    continue
                 if name == rec["player_a"]:
                     pinnacle_prob_a = float(prob)
                     break
             if pinnacle_prob_a is None and rec["player_a"]:
                 la = rec["player_a"].split()[-1].lower()
                 for name, prob in pinn_map.items():
+                    if name.startswith("_"):
+                        continue
                     if la in name.lower():
                         pinnacle_prob_a = float(prob)
                         break
@@ -179,6 +222,19 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             "player_a": rec["player_a"],
             "player_b": rec["player_b"],
             "current_score": _format_score(rec),
+            # Prematch-only rule (2026-09-10): ``kickoff`` (benchmark's
+            # scheduled start) arms the shared gate's prematch check
+            # and the live executor's buffer; ``match_started`` catches
+            # the games already visibly under way even when no
+            # benchmark start is known (any set/game on the board).
+            "kickoff": bench_start,
+            "match_started": bool(
+                (rec["set_score_a"] or 0) > 0
+                or (rec["set_score_b"] or 0) > 0
+                or (raw.get("current_set_games_a") or 0) > 0
+                or (raw.get("current_set_games_b") or 0) > 0
+                or raw.get("completed")
+                or raw.get("winner_side")),
             "round_label": _round_label(raw.get("level", "A"), raw.get("round", "")),
             "pre_match_prob_a": round(pre_prob_a, 4),
             "pre_match_prob_b": round(1 - pre_prob_a, 4),
