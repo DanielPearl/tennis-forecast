@@ -70,6 +70,14 @@ def _ticker_date_anchor(ticker: str | None) -> str | None:
         return None
 
 
+def _parse_iso(t: str | None) -> datetime | None:
+    try:
+        d = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
                              ) -> list[dict[str, Any]]:
     cfg = load_config()
@@ -183,6 +191,26 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             if pinnacle_prob_a is not None:
                 pinnacle_prob_b = 1.0 - pinnacle_prob_a
 
+        # Benchmark retirement at start (2026-09-11, same rule as the
+        # NBA exporter and the dashboard's apply_benchmark): once the
+        # match is under way the guest feed's line is frozen at cutoff
+        # while Kalshi prices live points — displaying it manufactured
+        # fake on-screen "edges" the trade path already refuses. The
+        # row keeps its ladder position; Model % retires.
+        _bs = _parse_iso(bench_start)
+        _match_started = bool(
+            (rec["set_score_a"] or 0) > 0
+            or (rec["set_score_b"] or 0) > 0
+            or (raw.get("current_set_games_a") or 0) > 0
+            or (raw.get("current_set_games_b") or 0) > 0
+            or raw.get("completed")
+            or raw.get("winner_side")
+            or (_bs is not None
+                and _bs <= datetime.now(timezone.utc)))
+        if _match_started:
+            pinnacle_prob_a = None
+            pinnacle_prob_b = None
+
         # Edge + EV columns are driven by Pinnacle (the sharp reference
         # the buy gate now uses) so the displayed numbers match the
         # decision the bot is actually making. When Pinnacle isn't
@@ -228,13 +256,7 @@ def build_watchlist_records(live_records: list[dict[str, Any]] | None = None
             # the games already visibly under way even when no
             # benchmark start is known (any set/game on the board).
             "kickoff": bench_start,
-            "match_started": bool(
-                (rec["set_score_a"] or 0) > 0
-                or (rec["set_score_b"] or 0) > 0
-                or (raw.get("current_set_games_a") or 0) > 0
-                or (raw.get("current_set_games_b") or 0) > 0
-                or raw.get("completed")
-                or raw.get("winner_side")),
+            "match_started": _match_started,
             "round_label": _round_label(raw.get("level", "A"), raw.get("round", "")),
             "pre_match_prob_a": round(pre_prob_a, 4),
             "pre_match_prob_b": round(1 - pre_prob_a, 4),
